@@ -64,7 +64,10 @@ HX = Role(
     mode=InteractionMode.DELEGATE,
     talks_to=["growth_pm"],
     tools=["search_notes", "read_note", "list_by_tag", "write_note"],
-    permissions=Permissions(write=["squad/hx/**"], write_with_approval=["assumptions/**"]),
+    # No write_with_approval: HX runs nested inside the Growth PM's
+    # consult_hx tool, with no path back to the founder for approval
+    # (ADR 0004). It proposes assumption updates in its findings instead.
+    permissions=Permissions(write=["squad/hx/**"]),
     delivers="An HXAnswer: cited findings, each classified as evidence, assumption or gap.",
 )
 

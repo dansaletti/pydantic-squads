@@ -13,7 +13,6 @@ from pydantic_ai import (
     DeferredToolRequests,
     ModelRetry,
     RunUsage,
-    Tool,
     models as pydantic_ai_models,
 )
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -266,13 +265,6 @@ def test_sources_exist_retries_when_source_missing(tmp_path):
         _sources_exist(kb, answer)
 
 
-def test_sources_exist_passes_through_deferred_requests(tmp_path):
-    """The HX output validator does not inspect a DeferredToolRequests output"""
-    kb = MarkdownKnowledgeBase(tmp_path)
-    deferred = DeferredToolRequests()
-    assert _sources_exist(kb, deferred) is deferred
-
-
 # -- consult_hx delegation ------------------------------------------------
 
 
@@ -288,28 +280,12 @@ def test_consult_hx_passes_usage_through(tmp_path):
     hx_agent = Agent(
         _scripted_model(_call_output_tool(answer)),
         deps_type=MarkdownKnowledgeBase,
-        output_type=[HXAnswer, DeferredToolRequests],
+        output_type=HXAnswer,
     )
     usage = RunUsage()
     result = asyncio.run(_consult_hx(hx_agent, kb, usage, "q"))
     assert result == answer
     assert usage.requests == 1
-
-
-def test_consult_hx_raises_when_hx_defers():
-    """consult_hx raises ModelRetry, not a type error, when HX itself needs approval"""
-
-    def dummy() -> str:
-        return "unused"
-
-    hx_agent = Agent(
-        _scripted_model(_call_tool("dummy", {})),
-        deps_type=str,
-        output_type=[HXAnswer, DeferredToolRequests],
-        tools=[Tool(dummy, requires_approval=True)],
-    )
-    with pytest.raises(ModelRetry):
-        asyncio.run(_consult_hx(hx_agent, "kb", RunUsage(), "q"))
 
 
 # -- ProductSquad: chat() --------------------------------------------------

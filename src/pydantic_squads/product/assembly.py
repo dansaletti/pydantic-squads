@@ -113,9 +113,7 @@ def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
         return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)
 
 
-def _sources_exist(kb: KnowledgeBase, output: HXAnswer | DeferredToolRequests) -> HXAnswer | DeferredToolRequests:
-    if isinstance(output, DeferredToolRequests):
-        return output
+def _sources_exist(kb: KnowledgeBase, output: HXAnswer) -> HXAnswer:
     for finding in output.findings:
         for source in finding.sources:
             try:
@@ -125,20 +123,16 @@ def _sources_exist(kb: KnowledgeBase, output: HXAnswer | DeferredToolRequests) -
     return output
 
 
-def _register_source_validator(agent: Agent[KnowledgeBase, Any]) -> None:
+def _register_source_validator(agent: Agent[KnowledgeBase, HXAnswer]) -> None:
     @agent.output_validator
-    def validate_sources(ctx: RunContext[KnowledgeBase], output: HXAnswer | DeferredToolRequests):
+    def validate_sources(ctx: RunContext[KnowledgeBase], output: HXAnswer) -> HXAnswer:
         return _sources_exist(ctx.deps, output)
 
 
-async def _consult_hx(hx_agent: Agent[KnowledgeBase, Any], kb: KnowledgeBase, usage: Any, question: str) -> HXAnswer:
+async def _consult_hx(hx_agent: Agent[KnowledgeBase, HXAnswer], kb: KnowledgeBase, usage: Any, question: str) -> HXAnswer:
     # Nested calls must use `run`, not `run_sync`: pydantic_ai forbids a nested
     # sync run inside a tool, since it could deadlock the outer run's event loop.
     result = await hx_agent.run(question, deps=kb, usage=usage)
-    if isinstance(result.output, DeferredToolRequests):
-        raise ModelRetry(
-            "HX needs a human's direct approval to update an assumption; ask the founder to consult HX directly"
-        )
     return result.output
 
 
@@ -168,7 +162,7 @@ def _build_agents(squad: Squad, model: Any, context: str, language: Language) ->
     hx = Agent(
         model,
         deps_type=KnowledgeBase,
-        output_type=[HXAnswer, DeferredToolRequests],
+        output_type=HXAnswer,  # no DeferredToolRequests: HX cannot request write approval (ADR 0004)
         system_prompt=_with_context(squad.instructions_for("hx"), context, language),
     )
     _register_note_tools(hx, squad["hx"])
