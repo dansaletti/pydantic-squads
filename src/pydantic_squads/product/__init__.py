@@ -14,6 +14,7 @@ from pydantic_squads.product.contracts import (
     SendBack,
     Story,
 )
+from pydantic_squads.product.knowledge import KnowledgeBase, MarkdownKnowledgeBase, Note
 from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
 from pydantic_squads.product.squad import Language, build_product_squad
 
@@ -26,7 +27,10 @@ __all__ = [
     "Finding",
     "FindingKind",
     "HXAnswer",
+    "KnowledgeBase",
     "Language",
+    "MarkdownKnowledgeBase",
+    "Note",
     "POOutput",
     "SendBack",
     "Story",
