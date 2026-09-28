@@ -6,6 +6,7 @@ validated and tested without an API key.
 """
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +48,8 @@ class Role(BaseModel):
     talks_to: list[str] = Field(min_length=1)
     tools: list[str] = Field(default_factory=list)
     permissions: Permissions = Field(default_factory=Permissions)
+    skills: list[str] = Field(default_factory=list)  # names of skills this role may load
+    scripts: Literal["never", "approval", "free"] = "approval"  # running a skill's bundled scripts
     delivers: str
     model: str | None = None  # None = the squad's default model
 
