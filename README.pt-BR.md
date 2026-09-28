@@ -26,7 +26,21 @@ from pydantic_squads import PT_BR, Squad
 squad = Squad(name="Produto", roles=[...], template=PT_BR)
 ```
 
-Veja o exemplo completo em [`examples/product_squad`](examples/product_squad/roles.py) e o roadmap em [docs/roadmap.md](docs/roadmap.md).
+## Squad de produto
+
+`pydantic_squads.product` traz uma squad pronta — Growth PM, pesquisador(a)
+de HX, Product Owner — com contratos de handoff tipados (veja a ADR 0003).
+Projetos consumidores só fornecem uma base de conhecimento; papéis e
+contratos são fixos.
+
+```python
+from pydantic_squads.product import build_product_squad
+
+squad = build_product_squad(language="pt-BR")  # ou "en"
+print(squad.instructions_for("growth_pm"))
+```
+
+Veja o roadmap em [docs/roadmap.md](docs/roadmap.md).
 
 ## Desenvolvimento
 

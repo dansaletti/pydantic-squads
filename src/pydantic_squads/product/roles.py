@@ -1,10 +1,10 @@
-"""Example: a small product squad (Growth PM, HX researcher, Product Owner).
+"""The product squad's three roles: Growth PM, HX researcher, Product Owner.
 
-The founder talks only to the Growth PM. The PM consults HX as a tool and,
-once the founder approves a bet, hands it off to the Product Owner.
+Role content is written in English (CLAUDE.md); pass `language` to
+`build_product_squad` for labels and a directive to answer in that language.
 """
 
-from pydantic_squads import HUMAN, InteractionMode, Permissions, Role, Squad
+from pydantic_squads import HUMAN, InteractionMode, Permissions, Role
 
 GROWTH_PM = Role(
     id="growth_pm",
@@ -19,7 +19,7 @@ GROWTH_PM = Role(
         "Frame hypotheses as: if we do X, we expect Y, measured by Z",
         "Prioritize bets making impact, confidence and effort explicit",
         "State the unvalidated assumptions each bet relies on",
-        "Close the bet into a structured artifact once the founder decides",
+        "Close the bet into a structured Bet once the founder decides",
     ],
     out_of_scope=[
         "Making the final decision: it always belongs to the founder",
@@ -35,7 +35,7 @@ GROWTH_PM = Role(
     talks_to=[HUMAN, "hx", "product_owner"],
     tools=["consult_hx", "search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/bets/**"], write_with_approval=["docs/**"]),
-    delivers="A founder-approved bet: hypothesis, metric, scope and assumptions.",
+    delivers="A founder-approved Bet: hypothesis, metric, scope and assumptions.",
 )
 
 HX = Role(
@@ -65,7 +65,7 @@ HX = Role(
     talks_to=["growth_pm"],
     tools=["search_notes", "read_note", "list_by_tag", "write_note"],
     permissions=Permissions(write=["squad/hx/**"], write_with_approval=["assumptions/**"]),
-    delivers="Cited findings, each classified as evidence, assumption or gap.",
+    delivers="An HXAnswer: cited findings, each classified as evidence, assumption or gap.",
 )
 
 PRODUCT_OWNER = Role(
@@ -89,10 +89,5 @@ PRODUCT_OWNER = Role(
     talks_to=["growth_pm"],
     tools=["search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/backlog/**"]),
-    delivers="A backlog with stories, acceptance criteria and out-of-scope items, or a justified send-back.",
+    delivers="A Backlog with stories and acceptance criteria, or a justified SendBack.",
 )
-
-PRODUCT_SQUAD = Squad(name="Product", roles=[GROWTH_PM, HX, PRODUCT_OWNER])
-
-if __name__ == "__main__":
-    print(PRODUCT_SQUAD.instructions_for("hx"))

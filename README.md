@@ -38,8 +38,6 @@ squad = Squad(name="Product", roles=[lead, researcher])
 print(squad.instructions_for("lead"))
 ```
 
-See [`examples/product_squad`](examples/product_squad/roles.py) for a full squad (Growth PM, HX researcher, Product Owner).
-
 Roles written in another language can use a matching `PromptTemplate` (`PT_BR` ships built in):
 
 ```python
@@ -47,9 +45,23 @@ from pydantic_squads import PT_BR, Squad
 squad = Squad(name="Produto", roles=[...], template=PT_BR)
 ```
 
+## Product squad
+
+`pydantic_squads.product` ships a ready-made squad — Growth PM, HX
+researcher, Product Owner — with typed hand-off contracts (see ADR 0003).
+Consuming projects supply only a knowledge base; roles and contracts are
+fixed.
+
+```python
+from pydantic_squads.product import build_product_squad
+
+squad = build_product_squad(language="en")  # or "pt-BR"
+print(squad.instructions_for("growth_pm"))
+```
+
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md). Next: typed hand-off contracts, then assembling roles into Pydantic AI agents.
+See [docs/roadmap.md](docs/roadmap.md). Next: the knowledge base, then assembling the product squad into Pydantic AI agents.
 
 ## Related
 
