@@ -42,22 +42,27 @@ print(squad.instructions_for("growth_pm"))
 
 ### Rodando de verdade (extra `ai`)
 
-`pip install "pydantic-squads[ai]"` monta a squad em agentes [Pydantic
-AI](https://ai.pydantic.dev) de verdade: o `ProductSquad` conversa com o
-Growth PM, que pode consultar a HX (achados citados, validados contra a
-base de conhecimento) e escrever notas dentro das suas `Permissions`. Uma
-escrita num caminho `write_with_approval` pausa a execução e devolve um
-`DeferredToolRequests` em vez de quebrar, para que um humano decida antes
-de qualquer escrita.
+`pip install "pydantic-squads[ai]"` (apoiado no [pydantic-ai-slim](https://ai.pydantic.dev),
+não no pacote `pydantic-ai` completo) monta a squad em agentes de verdade: o
+`ProductSquad` conversa com o Growth PM, que pode consultar a HX (achados
+citados, validados contra a base de conhecimento) e escrever notas dentro
+das suas `Permissions`. Uma escrita num caminho `write_with_approval` pausa
+a execução e devolve um `DeferredToolRequests` em vez de quebrar, para que
+um humano decida antes de qualquer escrita. A própria HX não pode pedir
+aprovação — veja a [ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md).
 
 ```python
 from pydantic_ai import DeferredToolRequests
 
-from pydantic_squads.product import MarkdownKnowledgeBase
+from pydantic_squads.product import Bet, MarkdownKnowledgeBase
 from pydantic_squads.product.assembly import ProductSquad
 
 kb = MarkdownKnowledgeBase("./vault")  # uma pasta de notas .md estilo Obsidian
-squad = ProductSquad(kb, model="openai:gpt-4o")
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="Ferramenta B2B para pequenas empresas de logística. Persona principal: gestor de despacho.",
+)
 
 resposta = squad.chat("Estamos perdendo usuários no cadastro, o que sabemos?")
 print(resposta)  # o Growth PM pode consultar a HX antes de responder
@@ -68,18 +73,25 @@ if isinstance(bet, DeferredToolRequests):
     ...  # resolva bet.approvals, depois squad.close_bet(deferred_tool_results=...)
 
 # Um humano revisa `bet` fora da biblioteca. Só repasse depois de aprovado:
-resultado = squad.submit_bet(bet)  # -> Backlog, SendBack ou DeferredToolRequests
-```
+resultado = squad.submit_bet(bet)
 
-`submit_bet` repassa um `SendBack` do Product Owner de volta ao Growth PM
-para revisar o bet automaticamente, até `max_send_backs` vezes (padrão 3).
+# Se o Product Owner devolver o bet, o Growth PM o revisa e submit_bet
+# devolve a Bet *revisada* em vez de reenviá-la automaticamente — um humano
+# precisa aprovar essa revisão também antes que ela chegue ao Product Owner.
+while isinstance(resultado, Bet):
+    ...  # um humano revisa `resultado` (a revisão) antes de reenviá-la
+    resultado = squad.submit_bet(resultado)
+
+# resultado agora é um Backlog (ou um DeferredToolRequests, se a própria
+# revisão precisou de aprovação de escrita).
+```
 
 Veja o roadmap em [docs/roadmap.md](docs/roadmap.md).
 
 ## Desenvolvimento
 
 ```bash
-uv sync
+uv sync  # adicione --extra ai para também rodar tests/test_product_assembly.py
 uv run pytest
 ```
 

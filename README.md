@@ -61,21 +61,27 @@ print(squad.instructions_for("growth_pm"))
 
 ### Running it (the `ai` extra)
 
-`pip install "pydantic-squads[ai]"` assembles the squad into real [Pydantic
-AI](https://ai.pydantic.dev) agents: `ProductSquad` talks to the Growth PM,
-which can consult HX (cited findings, validated against the knowledge base)
-and write notes within its `Permissions`. A write to a `write_with_approval`
-path pauses the run and hands you back a `DeferredToolRequests` instead of
-crashing, so a human decides before anything is written.
+`pip install "pydantic-squads[ai]"` (backed by [pydantic-ai-slim](https://ai.pydantic.dev),
+not the full `pydantic-ai` package) assembles the squad into real agents:
+`ProductSquad` talks to the Growth PM, which can consult HX (cited findings,
+validated against the knowledge base) and write notes within its
+`Permissions`. A write to a `write_with_approval` path pauses the run and
+hands you back a `DeferredToolRequests` instead of crashing, so a human
+decides before anything is written. HX itself cannot request approval — see
+[ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md).
 
 ```python
 from pydantic_ai import DeferredToolRequests
 
-from pydantic_squads.product import MarkdownKnowledgeBase
+from pydantic_squads.product import Bet, MarkdownKnowledgeBase
 from pydantic_squads.product.assembly import ProductSquad
 
 kb = MarkdownKnowledgeBase("./vault")  # a folder of Obsidian-style .md notes
-squad = ProductSquad(kb, model="openai:gpt-4o")
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="B2B tool for small logistics companies. Primary persona: dispatch manager.",
+)
 
 reply = squad.chat("Users are dropping off during signup, what do we know?")
 print(reply)  # the Growth PM may consult HX before answering
@@ -86,11 +92,18 @@ if isinstance(bet, DeferredToolRequests):
     ...  # resolve bet.approvals, then squad.close_bet(deferred_tool_results=...)
 
 # A human reviews `bet` outside this library. Only pass it on once approved:
-outcome = squad.submit_bet(bet)  # -> Backlog, SendBack, or DeferredToolRequests
-```
+outcome = squad.submit_bet(bet)
 
-`submit_bet` relays a `SendBack` from the Product Owner to the Growth PM to
-revise the bet automatically, up to `max_send_backs` times (default 3).
+# If the Product Owner sends it back, the Growth PM revises it and submit_bet
+# returns the *revised* Bet instead of resubmitting it automatically — a
+# human has to approve that revision too before it reaches the Product Owner.
+while isinstance(outcome, Bet):
+    ...  # a human reviews `outcome` (the revision) before resubmitting it
+    outcome = squad.submit_bet(outcome)
+
+# outcome is now a Backlog (or a DeferredToolRequests, if the revision itself
+# needed write approval).
+```
 
 ## Roadmap
 
@@ -103,7 +116,7 @@ See [docs/roadmap.md](docs/roadmap.md).
 ## Development
 
 ```bash
-uv sync
+uv sync  # add --extra ai to also run tests/test_product_assembly.py
 uv run pytest
 ```
 
