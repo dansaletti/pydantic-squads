@@ -1,6 +1,6 @@
 """Assemble the product squad into runnable Pydantic AI agents.
 
-Needs the optional `ai` extra (`pydantic-ai`). The rest of
+Needs the optional `ai` extra (`pydantic-ai-slim`). The rest of
 `pydantic_squads.product` stays dependency-free (ADR 0001); nothing else in
 this package imports this module, so it works without `pydantic_ai` installed.
 """

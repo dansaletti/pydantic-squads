@@ -20,7 +20,7 @@ Source = "https://github.com/dansaletti/pydantic-squads"
 
 [project.optional-dependencies]
 ai = [
-    "pydantic-ai>=2.51.0",
+    "pydantic-ai-slim>=2.51.0",
 ]
 
 [dependency-groups]
