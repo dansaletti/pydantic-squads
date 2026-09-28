@@ -59,9 +59,42 @@ squad = build_product_squad(language="en")  # or "pt-BR"
 print(squad.instructions_for("growth_pm"))
 ```
 
+### Running it (the `ai` extra)
+
+`pip install "pydantic-squads[ai]"` assembles the squad into real [Pydantic
+AI](https://ai.pydantic.dev) agents: `ProductSquad` talks to the Growth PM,
+which can consult HX (cited findings, validated against the knowledge base)
+and write notes within its `Permissions`. A write to a `write_with_approval`
+path pauses the run and hands you back a `DeferredToolRequests` instead of
+crashing, so a human decides before anything is written.
+
+```python
+from pydantic_ai import DeferredToolRequests
+
+from pydantic_squads.product import MarkdownKnowledgeBase
+from pydantic_squads.product.assembly import ProductSquad
+
+kb = MarkdownKnowledgeBase("./vault")  # a folder of Obsidian-style .md notes
+squad = ProductSquad(kb, model="openai:gpt-4o")
+
+reply = squad.chat("Users are dropping off during signup, what do we know?")
+print(reply)  # the Growth PM may consult HX before answering
+
+# Once the conversation has enough to work with:
+bet = squad.close_bet()
+if isinstance(bet, DeferredToolRequests):
+    ...  # resolve bet.approvals, then squad.close_bet(deferred_tool_results=...)
+
+# A human reviews `bet` outside this library. Only pass it on once approved:
+outcome = squad.submit_bet(bet)  # -> Backlog, SendBack, or DeferredToolRequests
+```
+
+`submit_bet` relays a `SendBack` from the Product Owner to the Growth PM to
+revise the bet automatically, up to `max_send_backs` times (default 3).
+
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md). Next: the knowledge base, then assembling the product squad into Pydantic AI agents.
+See [docs/roadmap.md](docs/roadmap.md).
 
 ## Related
 
