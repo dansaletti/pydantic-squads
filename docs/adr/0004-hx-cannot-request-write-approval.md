@@ -23,8 +23,10 @@ HX's `Permissions` no longer include `write_with_approval`. HX keeps its
 free `write=["squad/hx/**"]` for its own working notes, and proposes
 assumption status updates as findings in its `HXAnswer` instead of writing
 them. A human who wants to act on that proposal does so through the Growth
-PM — whose `write_with_approval=["docs/**"]` is already reachable from
-`chat()`, one level of nesting away from the founder — not through HX.
+PM instead of HX: the Growth PM's `write_with_approval` gains
+`"assumptions/**"` (alongside `"docs/**"`), so once the founder approves an
+update in `chat()` — one level of nesting away, not two — the Growth PM can
+actually write it.
 
 ## Consequences
 
@@ -32,6 +34,9 @@ PM — whose `write_with_approval=["docs/**"]` is already reachable from
   `consult_hx` no longer needs to special-case a deferred HX result, and
   the HX source validator no longer needs to pass a `DeferredToolRequests`
   through unexamined.
+- The Growth PM's `Permissions.write_with_approval` includes
+  `"assumptions/**"`, so it is the one role that can actually carry out an
+  approved assumption update, not just talk about it.
 - If a future delegate role genuinely needs to request write approval, it
   needs a way to propagate `DeferredToolRequests` through nested runs —
   that's follow-up work, not solved here.

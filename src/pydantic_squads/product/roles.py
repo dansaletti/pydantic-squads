@@ -20,6 +20,7 @@ GROWTH_PM = Role(
         "Prioritize bets making impact, confidence and effort explicit",
         "State the unvalidated assumptions each bet relies on",
         "Close the bet into a structured Bet once the founder decides",
+        "Update an assumption's status when the founder approves a change HX proposed",
     ],
     out_of_scope=[
         "Making the final decision: it always belongs to the founder",
@@ -34,7 +35,7 @@ GROWTH_PM = Role(
     mode=InteractionMode.CONVERSATIONAL,
     talks_to=[HUMAN, "hx", "product_owner"],
     tools=["consult_hx", "search_notes", "read_note", "write_note"],
-    permissions=Permissions(write=["squad/bets/**"], write_with_approval=["docs/**"]),
+    permissions=Permissions(write=["squad/bets/**"], write_with_approval=["docs/**", "assumptions/**"]),
     delivers="A founder-approved Bet: hypothesis, metric, scope and assumptions.",
 )
 

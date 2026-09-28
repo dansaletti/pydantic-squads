@@ -181,6 +181,16 @@ def test_write_note_requires_approval(tmp_path):
         _write_note(role, kb, "docs/x.md", "content", approved=False)
 
 
+def test_growth_pm_write_note_requires_approval_for_assumptions(tmp_path):
+    """The real Growth PM role requires approval to write to assumptions/** (ADR 0004)"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    with pytest.raises(ApprovalRequired):
+        _write_note(GROWTH_PM, kb, "assumptions/x.md", "content", approved=False)
+    result = _write_note(GROWTH_PM, kb, "assumptions/x.md", "content", approved=True)
+    assert "approved" in result
+    assert kb.read("assumptions/x.md").content == "content"
+
+
 def test_write_note_approved_writes(tmp_path):
     """write_note writes once a write_with_approval path has been approved"""
     kb = MarkdownKnowledgeBase(tmp_path)
