@@ -426,8 +426,23 @@ def test_submit_bet_returns_backlog(tmp_path):
     assert squad.submit_bet(_bet()) == backlog
 
 
-def test_submit_bet_relays_send_back_to_growth_pm(tmp_path):
-    """A SendBack is relayed to the Growth PM, which revises the bet for a second attempt"""
+def test_submit_bet_returns_revised_bet_without_resubmitting_to_po(tmp_path):
+    """On a SendBack, submit_bet() returns the PM's revision instead of resubmitting it to the PO"""
+    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
+    revised_bet = _bet(scope=["Signup wizard", "web only"])
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(
+        kb,
+        # Only 2 turns: PO(SendBack), PM(revise). A 3rd call (a second PO
+        # run) would overrun the script and fail the test.
+        model=_scripted_model(_call_output_tool(send_back), _call_output_tool(revised_bet)),
+    )
+    result = squad.submit_bet(_bet())
+    assert result == revised_bet
+
+
+def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path):
+    """The founder must call submit_bet() again with the revised bet to actually reach the PO"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     revised_bet = _bet(scope=["Signup wizard", "web only"])
     backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
@@ -435,16 +450,26 @@ def test_submit_bet_relays_send_back_to_growth_pm(tmp_path):
     squad = ProductSquad(
         kb,
         model=_scripted_model(
-            _call_output_tool(send_back),
-            _call_output_tool(revised_bet),
-            _call_output_tool(backlog),
+            _call_output_tool(send_back),  # PO, first submission
+            _call_output_tool(revised_bet),  # PM revises
+            _call_output_tool(backlog),  # PO, second submission (founder resubmitted)
         ),
     )
-    assert squad.submit_bet(_bet()) == backlog
+    first = squad.submit_bet(_bet())
+    assert first == revised_bet
+    assert squad.submit_bet(revised_bet) == backlog
 
 
-def test_submit_bet_returns_deferred_when_revision_needs_approval(tmp_path):
-    """submit_bet() surfaces a DeferredToolRequests if revising the bet needs approval"""
+def test_submit_bet_needs_a_bet_unless_resuming(tmp_path):
+    """submit_bet() without a bet and without a pending revision is a usage error"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, model=_scripted_model())
+    with pytest.raises(ValueError):
+        squad.submit_bet()
+
+
+def test_submit_bet_revision_can_defer_for_approval(tmp_path):
+    """submit_bet() surfaces a DeferredToolRequests if revising the bet needs write approval"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
@@ -458,17 +483,25 @@ def test_submit_bet_returns_deferred_when_revision_needs_approval(tmp_path):
     assert isinstance(result, DeferredToolRequests)
 
 
-def test_submit_bet_returns_last_send_back_when_budget_exhausted(tmp_path):
-    """submit_bet() gives up and returns the final SendBack after max_send_backs rounds"""
-    send_back = SendBack(reason="Still unclear", questions=["?"])
+def test_submit_bet_resume_after_deferred_revision_does_not_call_po_again(tmp_path):
+    """Resuming a deferred bet revision resumes only the Growth PM, never the Product Owner"""
+    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
+    revised_bet = _bet(scope=["Signup wizard", "web only"])
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        # Exactly 3 turns: PO(SendBack), PM(defers on write_note), PM(resumed
+        # -> Bet). A stray 4th call (an unexpected PO re-run) would overrun
+        # the script and fail the test.
         model=_scripted_model(
             _call_output_tool(send_back),
-            _call_output_tool(_bet()),
-            _call_output_tool(send_back),
+            _call_tool("write_note", {"path": "docs/context.md", "content": "notes"}),
+            _call_output_tool(revised_bet),
         ),
-        max_send_backs=1,
     )
-    assert squad.submit_bet(_bet()) == send_back
+    pending = squad.submit_bet(_bet())
+    assert isinstance(pending, DeferredToolRequests)
+
+    resumed = squad.submit_bet(deferred_tool_results=pending.build_results(approve_all=True))
+    assert resumed == revised_bet
+    assert kb.read("docs/context.md").content == "notes"

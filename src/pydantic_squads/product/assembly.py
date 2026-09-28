@@ -192,8 +192,14 @@ class ProductSquad:
     `chat()` talks to the Growth PM. `close_bet()` asks it to turn the
     conversation so far into a `Bet`, for the founder to review outside this
     class; only a `Bet` the founder actually approved should be passed to
-    `submit_bet()`. `submit_bet()` hands it to the Product Owner and relays a
-    `SendBack` back to the Growth PM to revise, up to `max_send_backs` times.
+    `submit_bet()`.
+
+    `submit_bet()` hands the bet to the Product Owner exactly once. If the
+    Product Owner sends it back, the Growth PM revises it and `submit_bet()`
+    returns that *revised* `Bet` instead of resubmitting it — a send-back
+    never reaches the Product Owner without a human approving the revision
+    first. The founder reviews the revised bet and calls `submit_bet()`
+    again to actually resubmit it.
 
     Any call may return a `DeferredToolRequests` when a tool needs human
     approval (e.g. writing to a `write_with_approval` path). Resolve it with
@@ -206,13 +212,12 @@ class ProductSquad:
         kb: KnowledgeBase,
         model: Any,
         language: Language = "en",
-        max_send_backs: int = 3,
     ) -> None:
         self.kb = kb
-        self.max_send_backs = max_send_backs
         squad = build_product_squad(language)
         self._growth_pm, self._hx, self._po = _build_agents(squad, model)
         self._history: list[ModelMessage] = []
+        self._pending_send_back: SendBack | None = None
 
     def chat(
         self, message: str | None = None, *, deferred_tool_results: DeferredToolResults | None = None
@@ -248,30 +253,47 @@ class ProductSquad:
         return result.output
 
     def submit_bet(
-        self, bet: Bet, *, deferred_tool_results: DeferredToolResults | None = None
-    ) -> Backlog | SendBack | DeferredToolRequests:
-        """Hand a founder-approved `Bet` to the Product Owner.
+        self, bet: Bet | None = None, *, deferred_tool_results: DeferredToolResults | None = None
+    ) -> Backlog | Bet | DeferredToolRequests:
+        """Hand a founder-approved `Bet` to the Product Owner, once.
 
-        A `SendBack` is relayed to the Growth PM to revise the bet, up to
-        `max_send_backs` times; whatever the last attempt produces is
-        returned.
+        Returns the `Backlog` on acceptance. On a `SendBack`, asks the
+        Growth PM to revise the bet and returns that *revised* `Bet` — it is
+        never resubmitted automatically. Call `submit_bet()` again with the
+        founder-approved revision to actually send it to the Product Owner.
+
+        Omit `bet` only when resuming a previous call whose bet-revision
+        step returned a `DeferredToolRequests`; pass its resolution as
+        `deferred_tool_results`. That resumes the Growth PM's revision, not
+        the Product Owner — a pending send-back is never sent to the
+        Product Owner as a side effect of resolving an approval.
         """
-        current = bet
-        for attempt in range(self.max_send_backs + 1):
-            po_result = self._po.run_sync(current.model_dump_json(), deps=self.kb)
-            output = po_result.output
-            if isinstance(output, Backlog) or attempt == self.max_send_backs:
-                return output
-            pm_prompt = None if deferred_tool_results else _send_back_prompt(output)
-            pm_result = self._growth_pm.run_sync(
-                pm_prompt,
-                deps=self.kb,
-                message_history=self._history,
-                output_type=[Bet, DeferredToolRequests],
-                deferred_tool_results=deferred_tool_results,
-            )
-            deferred_tool_results = None
-            self._history = pm_result.all_messages()
-            if isinstance(pm_result.output, DeferredToolRequests):
-                return pm_result.output
-            current = pm_result.output
+        if self._pending_send_back is not None and deferred_tool_results is not None:
+            return self._revise_bet(self._pending_send_back, deferred_tool_results=deferred_tool_results)
+        if bet is None:
+            raise ValueError("submit_bet() needs a Bet unless resuming a deferred bet revision")
+
+        self._pending_send_back = None
+        po_result = self._po.run_sync(bet.model_dump_json(), deps=self.kb)
+        output = po_result.output
+        if isinstance(output, Backlog):
+            return output
+        return self._revise_bet(output)
+
+    def _revise_bet(
+        self, send_back: SendBack, *, deferred_tool_results: DeferredToolResults | None = None
+    ) -> Bet | DeferredToolRequests:
+        pm_prompt = None if deferred_tool_results else _send_back_prompt(send_back)
+        pm_result = self._growth_pm.run_sync(
+            pm_prompt,
+            deps=self.kb,
+            message_history=self._history,
+            output_type=[Bet, DeferredToolRequests],
+            deferred_tool_results=deferred_tool_results,
+        )
+        self._history = pm_result.all_messages()
+        if isinstance(pm_result.output, DeferredToolRequests):
+            self._pending_send_back = send_back
+            return pm_result.output
+        self._pending_send_back = None
+        return pm_result.output
