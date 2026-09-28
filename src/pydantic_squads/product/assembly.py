@@ -6,6 +6,7 @@ this package imports this module, so it works without `pydantic_ai` installed.
 """
 
 import fnmatch
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic_ai import (
@@ -28,30 +29,61 @@ def _matches(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
+def _normalize_path(path: str) -> str | None:
+    """Canonicalize a vault-relative path before it is checked against a glob.
+
+    Resolves `.`/`..` segments so a permission glob can't be bypassed with
+    path traversal (e.g. `squad/bets/../../docs/x.md` really means
+    `docs/x.md`). Returns `None` for an absolute path or one that would
+    escape the vault root.
+    """
+    posix_path = PurePosixPath(path)
+    if posix_path.is_absolute():
+        return None
+    parts: list[str] = []
+    for part in posix_path.parts:
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    return "/".join(parts)
+
+
+def _path_allowed(path: str, patterns: list[str]) -> bool:
+    normalized = _normalize_path(path)
+    return normalized is not None and _matches(normalized, patterns)
+
+
 def _search_notes(role: Role, kb: KnowledgeBase, query: str) -> list[Note]:
-    return [n for n in kb.search(query) if _matches(n.path, role.permissions.read)]
+    return [n for n in kb.search(query) if _path_allowed(n.path, role.permissions.read)]
 
 
 def _list_by_tag(role: Role, kb: KnowledgeBase, tag: str) -> list[Note]:
-    return [n for n in kb.list_by_tag(tag) if _matches(n.path, role.permissions.read)]
+    return [n for n in kb.list_by_tag(tag) if _path_allowed(n.path, role.permissions.read)]
 
 
 def _read_note(role: Role, kb: KnowledgeBase, path: str) -> Note:
-    if not _matches(path, role.permissions.read):
+    normalized = _normalize_path(path)
+    if normalized is None or not _matches(normalized, role.permissions.read):
         raise ModelRetry(f"not permitted to read '{path}'")
-    return kb.read(path)
+    return kb.read(normalized)
 
 
 def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, approved: bool) -> str:
-    if _matches(path, role.permissions.write):
-        kb.write(path, content)
-        return f"wrote '{path}'"
-    if _matches(path, role.permissions.write_with_approval):
+    normalized = _normalize_path(path)
+    if normalized is None:
+        raise ModelRetry(f"invalid path '{path}'")
+    if _matches(normalized, role.permissions.write):
+        kb.write(normalized, content)
+        return f"wrote '{normalized}'"
+    if _matches(normalized, role.permissions.write_with_approval):
         if not approved:
-            raise ApprovalRequired(metadata={"path": path})
-        kb.write(path, content)
-        return f"wrote '{path}' (approved)"
-    raise ModelRetry(f"not permitted to write to '{path}'")
+            raise ApprovalRequired(metadata={"path": normalized})
+        kb.write(normalized, content)
+        return f"wrote '{normalized}' (approved)"
+    raise ModelRetry(f"not permitted to write to '{normalized}'")
 
 
 def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:

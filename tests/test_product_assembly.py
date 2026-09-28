@@ -25,6 +25,8 @@ from pydantic_squads.product.assembly import (
     _consult_hx,
     _list_by_tag,
     _matches,
+    _normalize_path,
+    _path_allowed,
     _read_note,
     _search_notes,
     _sources_exist,
@@ -163,6 +165,69 @@ def test_write_note_denied(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     with pytest.raises(ModelRetry):
         _write_note(_role(), kb, "anywhere/x.md", "content", approved=False)
+
+
+# -- path normalization / traversal ---------------------------------------
+
+
+def test_normalize_path_resolves_dot_dot_segments():
+    """_normalize_path collapses '..' segments before any glob check happens"""
+    assert _normalize_path("squad/bets/../../docs/x.md") == "docs/x.md"
+
+
+def test_normalize_path_resolves_dot_segments():
+    """_normalize_path drops './' segments"""
+    assert _normalize_path("./docs/x.md") == "docs/x.md"
+
+
+def test_normalize_path_rejects_absolute_path():
+    """_normalize_path rejects an absolute path"""
+    assert _normalize_path("/etc/passwd") is None
+
+
+def test_normalize_path_rejects_traversal_above_root():
+    """_normalize_path rejects '..' that would escape the vault root"""
+    assert _normalize_path("../outside.md") is None
+
+
+def test_write_note_traversal_requires_approval_not_free_write(tmp_path):
+    """A write disguised with '../' traversal is checked against its real, normalized target"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    role = _role(write=["squad/bets/**"], write_with_approval=["docs/**"])
+    with pytest.raises(ApprovalRequired):
+        _write_note(role, kb, "squad/bets/../../docs/x.md", "content", approved=False)
+    assert not (tmp_path / "docs" / "x.md").exists()
+
+
+def test_write_note_traversal_writes_to_normalized_path_once_approved(tmp_path):
+    """Once approved, a traversal path writes to its normalized target, not the raw one"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    role = _role(write_with_approval=["docs/**"])
+    _write_note(role, kb, "squad/bets/../../docs/x.md", "content", approved=True)
+    assert kb.read("docs/x.md").content == "content"
+
+
+def test_write_note_absolute_path_rejected(tmp_path):
+    """write_note rejects an absolute path even if it looks like it matches a glob"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    role = _role(write=["**"])
+    with pytest.raises(ModelRetry):
+        _write_note(role, kb, "/etc/passwd", "content", approved=False)
+
+
+def test_read_note_traversal_denied(tmp_path):
+    """A read disguised with '../' traversal is checked against its real, normalized target"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("docs/x.md", "secret")
+    role = _role(read=["squad/bets/**"])
+    with pytest.raises(ModelRetry):
+        _read_note(role, kb, "squad/bets/../../docs/x.md")
+
+
+def test_path_allowed_normalizes_before_matching():
+    """_path_allowed (used by search_notes/list_by_tag) checks the normalized path"""
+    assert not _path_allowed("squad/bets/../../docs/x.md", ["squad/bets/**"])
+    assert _path_allowed("squad/bets/../../docs/x.md", ["docs/**"])
 
 
 # -- HX output validator ------------------------------------------------
