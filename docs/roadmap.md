@@ -14,5 +14,9 @@ items below are being built through it, in phases:
    contracts and knowledge-base tools, behind the optional `ai` extra —
    `pydantic_squads.product.assembly`.
 4. **Flow helpers**: a human checkpoint before a bet reaches the Product
-   Owner, and a bounded send-back loop back to the Growth PM —
-   `ProductSquad.close_bet()` in the assembly module.
+   Owner, and one before a Growth-PM revision is resubmitted after a
+   Product Owner send-back — `ProductSquad.close_bet()`/`submit_bet()` in
+   the assembly module.
+5. **Skills**: per-role Agent Skills (`SKILL.md` plus `references/`,
+   `assets/` and `scripts/`), behind the optional `skills` extra —
+   `pydantic_squads.product.skills_integration` (see ADR 0005).
