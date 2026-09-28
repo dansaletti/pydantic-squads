@@ -6,7 +6,7 @@ this package imports this module, so it works without `pydantic_ai` installed.
 """
 
 import fnmatch
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pydantic_ai import (
@@ -161,12 +161,38 @@ def _with_context(instructions: str, context: str, language: Language) -> str:
     return f"{instructions}\n\n## {_CONTEXT_HEADING[language]}\n{context}"
 
 
-def _build_agents(squad: Squad, model: Any, context: str, language: Language) -> tuple[Agent, Agent, Agent]:
+def _skill_kwargs(build_role_skills: Any, all_skills_dirs: list[Path] | None, role: Role) -> dict[str, list[Any]]:
+    """`capabilities=`/`toolsets=` kwargs exposing `role`'s skills, or `{}` when skills are off."""
+    if build_role_skills is None:
+        return {}
+    capability, toolset = build_role_skills(role, all_skills_dirs)
+    kwargs: dict[str, list[Any]] = {}
+    if capability is not None:
+        kwargs["capabilities"] = [capability]
+    if toolset is not None:
+        kwargs["toolsets"] = [toolset]
+    return kwargs
+
+
+def _build_agents(
+    squad: Squad, model: Any, context: str, language: Language, skills_dirs: list[Path] | None
+) -> tuple[Agent, Agent, Agent]:
+    # Imported lazily and only when skills are actually requested, so the `ai`
+    # extra alone (skills_dirs=None, the default) never needs the `skills`
+    # extra installed.
+    build_role_skills: Any = None
+    all_skills_dirs: list[Path] | None = None
+    if skills_dirs is not None:
+        from pydantic_squads.product.skills_integration import LIBRARY_SKILLS_DIR, build_role_skills
+
+        all_skills_dirs = [LIBRARY_SKILLS_DIR, *skills_dirs]
+
     growth_pm = Agent(
         model,
         deps_type=KnowledgeBase,
         output_type=[str, DeferredToolRequests],
         system_prompt=_with_context(squad.instructions_for("growth_pm"), context, language),
+        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["growth_pm"]),
     )
     _register_note_tools(growth_pm, squad["growth_pm"])
 
@@ -175,6 +201,7 @@ def _build_agents(squad: Squad, model: Any, context: str, language: Language) ->
         deps_type=KnowledgeBase,
         output_type=HXAnswer,  # no DeferredToolRequests: HX cannot request write approval (ADR 0004)
         system_prompt=_with_context(squad.instructions_for("hx"), context, language),
+        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["hx"]),
     )
     _register_note_tools(hx, squad["hx"])
     _register_source_validator(hx)
@@ -184,6 +211,7 @@ def _build_agents(squad: Squad, model: Any, context: str, language: Language) ->
         deps_type=KnowledgeBase,
         output_type=[Backlog, SendBack],
         system_prompt=_with_context(squad.instructions_for("product_owner"), context, language),
+        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["product_owner"]),
     )
     _register_note_tools(po, squad["product_owner"])
 
@@ -225,6 +253,13 @@ class ProductSquad:
     approval (e.g. writing to a `write_with_approval` path). Resolve it with
     `DeferredToolRequests.build_results(...)` and pass the result back in as
     `deferred_tool_results` on the next call of the same method.
+
+    `skills_dirs` adds skill-library directories on top of the library's own
+    (`pydantic_squads.product.skills`); pass it to give a role access to
+    project-specific skills, or omit it to skip skill support entirely
+    (needs the `skills` extra only when this is not `None`). Each agent only
+    ever sees the skills listed in its own `Role.skills`. See
+    `pydantic_squads.product.skills_integration` and ADR 0005.
     """
 
     def __init__(
@@ -233,10 +268,11 @@ class ProductSquad:
         model: Any,
         context: str,
         language: Language = "en",
+        skills_dirs: list[Path] | None = None,
     ) -> None:
         self.kb = kb
         squad = build_product_squad(language)
-        self._growth_pm, self._hx, self._po = _build_agents(squad, model, context, language)
+        self._growth_pm, self._hx, self._po = _build_agents(squad, model, context, language, skills_dirs)
         self._history: list[ModelMessage] = []
         self._pending_send_back: SendBack | None = None
 

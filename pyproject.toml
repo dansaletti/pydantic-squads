@@ -22,6 +22,9 @@ Source = "https://github.com/dansaletti/pydantic-squads"
 ai = [
     "pydantic-ai-slim>=2.51.0",
 ]
+skills = [
+    "pydantic-ai-skills>=2.0.0",
+]
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov"]
