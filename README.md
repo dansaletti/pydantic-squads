@@ -73,7 +73,7 @@ decides before anything is written. HX itself cannot request approval — see
 ```python
 from pydantic_ai import DeferredToolRequests
 
-from pydantic_squads.product import Bet, MarkdownKnowledgeBase
+from pydantic_squads.product import MarkdownKnowledgeBase, Revision
 from pydantic_squads.product.assembly import ProductSquad
 
 kb = MarkdownKnowledgeBase("./vault")  # a folder of Obsidian-style .md notes
@@ -95,11 +95,13 @@ if isinstance(bet, DeferredToolRequests):
 outcome = squad.submit_bet(bet)
 
 # If the Product Owner sends it back, the Growth PM revises it and submit_bet
-# returns the *revised* Bet instead of resubmitting it automatically — a
-# human has to approve that revision too before it reaches the Product Owner.
-while isinstance(outcome, Bet):
-    ...  # a human reviews `outcome` (the revision) before resubmitting it
-    outcome = squad.submit_bet(outcome)
+# returns a Revision (the new Bet plus the PO's SendBack) instead of
+# resubmitting automatically — a human sees why, then approves the revision
+# before it reaches the Product Owner.
+while isinstance(outcome, Revision):
+    print(outcome.send_back.reason, outcome.send_back.questions)
+    ...  # a human reviews outcome.bet before resubmitting it
+    outcome = squad.submit_bet(outcome.bet)
 
 # outcome is now a Backlog (or a DeferredToolRequests, if the revision itself
 # needed write approval).

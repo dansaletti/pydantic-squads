@@ -33,7 +33,7 @@ from pydantic_squads.product.assembly import (
     _sources_exist,
     _write_note,
 )
-from pydantic_squads.product.contracts import Backlog, Bet, Finding, FindingKind, HXAnswer, SendBack, Story
+from pydantic_squads.product.contracts import Backlog, Bet, Finding, FindingKind, HXAnswer, Revision, SendBack, Story
 from pydantic_squads.product.knowledge import MarkdownKnowledgeBase
 from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
 
@@ -602,8 +602,8 @@ def test_submit_bet_returns_backlog(tmp_path):
     assert squad.submit_bet(_bet()) == backlog
 
 
-def test_submit_bet_returns_revised_bet_without_resubmitting_to_po(tmp_path):
-    """On a SendBack, submit_bet() returns the PM's revision instead of resubmitting it to the PO"""
+def test_submit_bet_returns_revision_without_resubmitting_to_po(tmp_path):
+    """On a SendBack, submit_bet() returns a Revision instead of resubmitting it to the PO"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     revised_bet = _bet(scope=["Signup wizard", "web only"])
     kb = MarkdownKnowledgeBase(tmp_path)
@@ -615,11 +615,13 @@ def test_submit_bet_returns_revised_bet_without_resubmitting_to_po(tmp_path):
         model=_scripted_model(_call_output_tool(send_back), _call_output_tool(revised_bet)),
     )
     result = squad.submit_bet(_bet())
-    assert result == revised_bet
+    assert isinstance(result, Revision)
+    assert result.bet == revised_bet
+    assert result.send_back == send_back
 
 
 def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path):
-    """The founder must call submit_bet() again with the revised bet to actually reach the PO"""
+    """The founder must call submit_bet(revision.bet) to actually reach the PO"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     revised_bet = _bet(scope=["Signup wizard", "web only"])
     backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
@@ -633,9 +635,9 @@ def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path)
             _call_output_tool(backlog),  # PO, second submission (founder resubmitted)
         ),
     )
-    first = squad.submit_bet(_bet())
-    assert first == revised_bet
-    assert squad.submit_bet(revised_bet) == backlog
+    revision = squad.submit_bet(_bet())
+    assert isinstance(revision, Revision)
+    assert squad.submit_bet(revision.bet) == backlog
 
 
 def test_submit_bet_needs_a_bet_unless_resuming(tmp_path):
@@ -683,5 +685,7 @@ def test_submit_bet_resume_after_deferred_revision_does_not_call_po_again(tmp_pa
     assert isinstance(pending, DeferredToolRequests)
 
     resumed = squad.submit_bet(deferred_tool_results=pending.build_results(approve_all=True))
-    assert resumed == revised_bet
+    assert isinstance(resumed, Revision)
+    assert resumed.bet == revised_bet
+    assert resumed.send_back == send_back
     assert kb.read("docs/context.md").content == "notes"

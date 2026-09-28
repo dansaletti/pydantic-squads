@@ -85,3 +85,17 @@ class SendBack(BaseModel):
 
 POOutput = Backlog | SendBack
 """The Product Owner always delivers a `Backlog` or sends the bet back."""
+
+
+class Revision(BaseModel):
+    """A `Bet` the Growth PM revised after a Product Owner `SendBack`.
+
+    Carries the `SendBack` that prompted the revision alongside the new
+    `Bet`, so the founder can see the Product Owner's reason and questions
+    when deciding whether to approve it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    bet: Bet
+    send_back: SendBack

@@ -11,6 +11,7 @@ from pydantic_squads.product.contracts import (
     FindingKind,
     HXAnswer,
     POOutput,
+    Revision,
     SendBack,
     Story,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "MarkdownKnowledgeBase",
     "Note",
     "POOutput",
+    "Revision",
     "SendBack",
     "Story",
     "build_product_squad",

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from pydantic_squads.product import Backlog, Bet, Finding, FindingKind, HXAnswer, SendBack, Story
+from pydantic_squads.product import Backlog, Bet, Finding, FindingKind, HXAnswer, Revision, SendBack, Story
 
 
 def test_evidence_requires_source():
@@ -103,3 +103,23 @@ def test_send_back_with_questions_is_valid():
     """A SendBack accepts a reason with open questions"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platforms are in scope?"])
     assert send_back.questions == ["Which platforms are in scope?"]
+
+
+def _bet(**overrides) -> Bet:
+    defaults = dict(
+        hypothesis="Shortening onboarding lifts activation",
+        metric="activation_rate",
+        expected_impact="+5pp",
+        scope=["Signup wizard"],
+        out_of_scope=["Payments"],
+    )
+    return Bet(**{**defaults, **overrides})
+
+
+def test_revision_carries_both_the_new_bet_and_the_send_back():
+    """A Revision pairs the PM's new Bet with the SendBack that prompted it"""
+    send_back = SendBack(reason="Scope is unclear", questions=["Which platforms are in scope?"])
+    bet = _bet()
+    revision = Revision(bet=bet, send_back=send_back)
+    assert revision.bet == bet
+    assert revision.send_back == send_back

@@ -20,7 +20,7 @@ from pydantic_ai import (
 from pydantic_ai.messages import ModelMessage
 
 from pydantic_squads import Role, Squad
-from pydantic_squads.product.contracts import Backlog, Bet, HXAnswer, SendBack
+from pydantic_squads.product.contracts import Backlog, Bet, HXAnswer, Revision, SendBack
 from pydantic_squads.product.knowledge import KnowledgeBase, Note
 from pydantic_squads.product.squad import Language, build_product_squad
 
@@ -215,10 +215,11 @@ class ProductSquad:
 
     `submit_bet()` hands the bet to the Product Owner exactly once. If the
     Product Owner sends it back, the Growth PM revises it and `submit_bet()`
-    returns that *revised* `Bet` instead of resubmitting it — a send-back
-    never reaches the Product Owner without a human approving the revision
-    first. The founder reviews the revised bet and calls `submit_bet()`
-    again to actually resubmit it.
+    returns a `Revision` (the new `Bet` plus the `SendBack` that prompted
+    it) instead of resubmitting — a send-back never reaches the Product
+    Owner without a human seeing why and approving the revision first. The
+    founder reviews `revision.send_back` and `revision.bet`, then calls
+    `submit_bet(revision.bet)` to actually resubmit it.
 
     Any call may return a `DeferredToolRequests` when a tool needs human
     approval (e.g. writing to a `write_with_approval` path). Resolve it with
@@ -274,13 +275,15 @@ class ProductSquad:
 
     def submit_bet(
         self, bet: Bet | None = None, *, deferred_tool_results: DeferredToolResults | None = None
-    ) -> Backlog | Bet | DeferredToolRequests:
+    ) -> Backlog | Revision | DeferredToolRequests:
         """Hand a founder-approved `Bet` to the Product Owner, once.
 
         Returns the `Backlog` on acceptance. On a `SendBack`, asks the
-        Growth PM to revise the bet and returns that *revised* `Bet` — it is
-        never resubmitted automatically. Call `submit_bet()` again with the
-        founder-approved revision to actually send it to the Product Owner.
+        Growth PM to revise the bet and returns a `Revision` (the new `Bet`
+        plus the `SendBack` that prompted it) — it is never resubmitted
+        automatically. Call `submit_bet(revision.bet)` once the founder has
+        seen `revision.send_back` and approved the revision, to actually
+        send it to the Product Owner.
 
         Omit `bet` only when resuming a previous call whose bet-revision
         step returned a `DeferredToolRequests`; pass its resolution as
@@ -302,7 +305,7 @@ class ProductSquad:
 
     def _revise_bet(
         self, send_back: SendBack, *, deferred_tool_results: DeferredToolResults | None = None
-    ) -> Bet | DeferredToolRequests:
+    ) -> Revision | DeferredToolRequests:
         pm_prompt = None if deferred_tool_results else _send_back_prompt(send_back)
         pm_result = self._growth_pm.run_sync(
             pm_prompt,
@@ -316,4 +319,4 @@ class ProductSquad:
             self._pending_send_back = send_back
             return pm_result.output
         self._pending_send_back = None
-        return pm_result.output
+        return Revision(bet=pm_result.output, send_back=send_back)

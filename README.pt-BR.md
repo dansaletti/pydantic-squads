@@ -54,7 +54,7 @@ aprovação — veja a [ADR 0004](docs/adr/0004-hx-cannot-request-write-approval
 ```python
 from pydantic_ai import DeferredToolRequests
 
-from pydantic_squads.product import Bet, MarkdownKnowledgeBase
+from pydantic_squads.product import MarkdownKnowledgeBase, Revision
 from pydantic_squads.product.assembly import ProductSquad
 
 kb = MarkdownKnowledgeBase("./vault")  # uma pasta de notas .md estilo Obsidian
@@ -76,11 +76,13 @@ if isinstance(bet, DeferredToolRequests):
 resultado = squad.submit_bet(bet)
 
 # Se o Product Owner devolver o bet, o Growth PM o revisa e submit_bet
-# devolve a Bet *revisada* em vez de reenviá-la automaticamente — um humano
-# precisa aprovar essa revisão também antes que ela chegue ao Product Owner.
-while isinstance(resultado, Bet):
-    ...  # um humano revisa `resultado` (a revisão) antes de reenviá-la
-    resultado = squad.submit_bet(resultado)
+# devolve uma Revision (a nova Bet mais o SendBack do PO) em vez de
+# reenviá-la automaticamente — um humano vê o motivo e então aprova a
+# revisão antes que ela chegue ao Product Owner.
+while isinstance(resultado, Revision):
+    print(resultado.send_back.reason, resultado.send_back.questions)
+    ...  # um humano revisa resultado.bet antes de reenviá-la
+    resultado = squad.submit_bet(resultado.bet)
 
 # resultado agora é um Backlog (ou um DeferredToolRequests, se a própria
 # revisão precisou de aprovação de escrita).
