@@ -134,6 +134,13 @@ def test_read_note_denied(tmp_path):
         _read_note(_role(read=["public/**"]), kb, "private/b.md")
 
 
+def test_read_note_missing_note_raises_model_retry_not_file_not_found_error(tmp_path):
+    """read_note converts a missing note into ModelRetry, never a raw FileNotFoundError"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    with pytest.raises(ModelRetry):
+        _read_note(_role(read=["**"]), kb, "public/missing.md")
+
+
 def test_write_note_free_write(tmp_path):
     """write_note writes directly to a path covered by the write permission"""
     kb = MarkdownKnowledgeBase(tmp_path)

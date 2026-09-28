@@ -68,7 +68,10 @@ def _read_note(role: Role, kb: KnowledgeBase, path: str) -> Note:
     normalized = _normalize_path(path)
     if normalized is None or not _matches(normalized, role.permissions.read):
         raise ModelRetry(f"not permitted to read '{path}'")
-    return kb.read(normalized)
+    try:
+        return kb.read(normalized)
+    except FileNotFoundError:
+        raise ModelRetry(f"note '{normalized}' does not exist") from None
 
 
 def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, approved: bool) -> str:
