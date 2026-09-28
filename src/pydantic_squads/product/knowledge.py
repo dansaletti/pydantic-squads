@@ -77,7 +77,13 @@ class MarkdownKnowledgeBase:
         full.write_text(content, encoding="utf-8")
 
     def _all_notes(self) -> list[Note]:
-        return [self.read(str(p.relative_to(self.root))) for p in sorted(self.root.rglob("*.md"))]
+        notes = []
+        for p in sorted(self.root.rglob("*.md")):
+            rel = p.relative_to(self.root)
+            if any(part.startswith(".") for part in rel.parts):
+                continue  # skip dotfiles/dotfolders like .trash, .obsidian
+            notes.append(self.read(str(rel)))
+        return notes
 
 
 def _parse_note(text: str) -> tuple[dict[str, str | list[str]], str]:

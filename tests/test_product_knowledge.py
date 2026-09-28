@@ -59,6 +59,30 @@ def test_search_matches_path():
     assert [n.path for n in results] == ["interviews/onboarding-friction.md"]
 
 
+def test_search_ignores_dotfolders(tmp_path):
+    """search skips notes under a dot-prefixed folder like .trash or .obsidian"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/keep.md", "alpha content")
+    kb.write(".trash/deleted.md", "alpha content too")
+    kb.write(".obsidian/workspace.md", "alpha content as well")
+    assert [n.path for n in kb.search("alpha")] == ["notes/keep.md"]
+
+
+def test_list_by_tag_ignores_dotfolders(tmp_path):
+    """list_by_tag skips notes under a dot-prefixed folder like .trash or .obsidian"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/keep.md", "---\ntags: [x]\n---\nbody")
+    kb.write(".trash/deleted.md", "---\ntags: [x]\n---\nbody")
+    assert [n.path for n in kb.list_by_tag("x")] == ["notes/keep.md"]
+
+
+def test_read_still_works_for_a_note_inside_a_dotfolder(tmp_path):
+    """Dotfolders are only skipped by enumeration (search/list_by_tag); direct read still works"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write(".trash/deleted.md", "still readable directly")
+    assert kb.read(".trash/deleted.md").content == "still readable directly"
+
+
 def test_write_then_read_round_trips(tmp_path):
     """A note written to the vault can be read back with its frontmatter"""
     kb = MarkdownKnowledgeBase(tmp_path)
