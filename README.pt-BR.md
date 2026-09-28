@@ -16,6 +16,7 @@ A maioria dos frameworks multiagentes foca em como os agentes *executam*. O `pyd
   - **Invariantes** valem para qualquer squad: ids únicos, nenhuma referência a papel inexistente, `human` é reservado e não existe permissão de apagar.
   - **Políticas** são opinativas e substituíveis. As padrões: exatamente um papel conversacional, e só ele fala com o humano.
 - **Permissões**: padrões glob sobre a base de conhecimento para leitura, escrita e escrita com aprovação humana.
+- **Skills**: o `skills` de um papel nomeia as [Agent Skills](https://agentskills.io/home) que ele pode carregar, e `scripts` (`never`/`approval`/`free`) define como ele pode rodar os scripts que vêm junto. Ligar isso a um agente de verdade fica em `pydantic_squads.product` (veja abaixo).
 
 ## Papéis em português
 
@@ -88,12 +89,40 @@ while isinstance(resultado, Revision):
 # revisão precisou de aprovação de escrita).
 ```
 
+### Skills (extra `skills`)
+
+Cada papel pode carregar [Agent Skills](https://agentskills.io/home) —
+pacotes `SKILL.md` com `references/`, `assets/` e `scripts/` — restritas ao
+seu próprio `Role.skills`; o Growth PM, a HX e o Product Owner já trazem
+uma cada (`prioritization`, `evidence-classification`, `user-stories`), e um
+projeto pode adicionar as suas. `pip install "pydantic-squads[skills]"`
+traz o [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
+usado em vez do `Skills` embutido do Pydantic AI porque esse só carrega as
+instruções do `SKILL.md`, não os arquivos que ele referencia — veja a
+[ADR 0005](docs/adr/0005-pydantic-ai-skills-for-bundled-files.md).
+
+```python
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="...",
+    skills_dirs=["./skills"],  # complementa as da biblioteca; omita para nenhuma
+)
+```
+
+Um papel nunca enxerga uma skill que não declarou, mesmo vinda do mesmo
+diretório. `Role.scripts` (padrão `"approval"`) governa `run_skill_script`
+do mesmo jeito que `write_with_approval` governa uma escrita de nota:
+`"never"` remove a ferramenta, `"approval"` a adia como um
+`DeferredToolRequests`, `"free"` roda sem pedir aprovação. Ler os arquivos
+de uma skill com `read_skill_resource` é sempre livre.
+
 Veja o roadmap em [docs/roadmap.md](docs/roadmap.md).
 
 ## Desenvolvimento
 
 ```bash
-uv sync  # adicione --extra ai para também rodar tests/test_product_assembly.py
+uv sync  # adicione --extra ai para tests/test_product_assembly.py, --extra skills para tests/test_product_skills.py
 uv run pytest
 ```
 

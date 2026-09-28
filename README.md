@@ -16,6 +16,7 @@ Most multi-agent frameworks focus on how agents *run*. `pydantic-squads` focuses
   - **Invariants** hold for every squad: unique ids, no references to unknown roles, `human` is reserved, and there is no delete permission.
   - **Policies** are opinionated and swappable. The defaults: exactly one conversational role, and only it talks to the human.
 - **Permissions**: glob patterns over the knowledge base for read, write, and write-with-human-approval.
+- **Skills**: a role's `skills` names the [Agent Skills](https://agentskills.io/home) it may load, and `scripts` (`never`/`approval`/`free`) sets how it may run one's bundled scripts. Wiring these into a real agent lives in `pydantic_squads.product` (see below).
 
 ## Quick look
 
@@ -107,6 +108,34 @@ while isinstance(outcome, Revision):
 # needed write approval).
 ```
 
+### Skills (the `skills` extra)
+
+Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
+packages with `references/`, `assets/` and `scripts/` — scoped to its own
+`Role.skills`; the Growth PM, HX and the Product Owner each ship one
+(`prioritization`, `evidence-classification`, `user-stories`), and a
+project can add its own. `pip install "pydantic-squads[skills]"` pulls in
+[pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
+used instead of Pydantic AI's own built-in `Skills` because that one only
+loads a `SKILL.md`'s instructions, not the files it points to — see
+[ADR 0005](docs/adr/0005-pydantic-ai-skills-for-bundled-files.md).
+
+```python
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="...",
+    skills_dirs=["./skills"],  # supplements the library's own; omit for none
+)
+```
+
+A role never sees a skill it did not declare, even one from the same
+directory. `Role.scripts` (default `"approval"`) governs `run_skill_script`
+the same way `write_with_approval` governs a note write: `"never"` removes
+the tool, `"approval"` defers it as a `DeferredToolRequests`, `"free"` runs
+it unwrapped. Reading a skill's bundled files with `read_skill_resource` is
+always free.
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md).
@@ -118,7 +147,7 @@ See [docs/roadmap.md](docs/roadmap.md).
 ## Development
 
 ```bash
-uv sync  # add --extra ai to also run tests/test_product_assembly.py
+uv sync  # add --extra ai for tests/test_product_assembly.py, --extra skills for tests/test_product_skills.py
 uv run pytest
 ```
 
