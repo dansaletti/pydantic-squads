@@ -27,12 +27,15 @@ from pydantic_squads.product.assembly import (
     _normalize_path,
     _path_allowed,
     _read_note,
+    _register_consult_hx,
+    _register_note_tools,
     _search_notes,
     _sources_exist,
     _write_note,
 )
 from pydantic_squads.product.contracts import Backlog, Bet, Finding, FindingKind, HXAnswer, SendBack, Story
 from pydantic_squads.product.knowledge import MarkdownKnowledgeBase
+from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
 
 pydantic_ai_models.ALLOW_MODEL_REQUESTS = False
 
@@ -238,6 +241,68 @@ def test_path_allowed_normalizes_before_matching():
     assert _path_allowed("squad/bets/../../docs/x.md", ["docs/**"])
 
 
+# -- tool registration matches Role.tools ----------------------------------
+
+
+def _registered_tool_names(role: Role) -> list[str]:
+    """Register `role`'s note tools on a fresh agent and return what got registered."""
+    captured = {}
+
+    def fn(messages, info):
+        captured["names"] = sorted(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    agent = Agent(FunctionModel(fn), deps_type=str)
+    _register_note_tools(agent, role)
+    agent.run_sync("hi", deps="kb")
+    return captured["names"]
+
+
+def test_growth_pm_registers_exactly_its_declared_note_tools():
+    """The Growth PM's registered note tools match Role.tools exactly (list_by_tag is not declared)"""
+    assert _registered_tool_names(GROWTH_PM) == sorted(t for t in GROWTH_PM.tools if t != "consult_hx")
+
+
+def test_hx_registers_exactly_its_declared_note_tools():
+    """HX's registered note tools match Role.tools exactly"""
+    assert _registered_tool_names(HX) == sorted(HX.tools)
+
+
+def test_product_owner_registers_exactly_its_declared_note_tools():
+    """The Product Owner's registered note tools match Role.tools exactly (list_by_tag is not declared)"""
+    assert _registered_tool_names(PRODUCT_OWNER) == sorted(PRODUCT_OWNER.tools)
+
+
+def test_consult_hx_registered_when_role_declares_it():
+    """consult_hx is registered on an agent whose Role.tools lists it"""
+    captured = {}
+
+    def fn(messages, info):
+        captured["names"] = sorted(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    pm_agent = Agent(FunctionModel(fn), deps_type=str)
+    hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
+    _register_consult_hx(pm_agent, GROWTH_PM, hx_agent)
+    pm_agent.run_sync("hi", deps="kb")
+    assert "consult_hx" in captured["names"]
+
+
+def test_consult_hx_not_registered_when_role_does_not_declare_it():
+    """consult_hx is not registered on a role that doesn't list it in Role.tools"""
+    captured = {}
+
+    def fn(messages, info):
+        captured["names"] = sorted(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    po_agent = Agent(FunctionModel(fn), deps_type=str)
+    hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
+    _register_consult_hx(po_agent, PRODUCT_OWNER, hx_agent)
+    po_agent.run_sync("hi", deps="kb")
+    assert captured["names"] == []
+
+
 # -- HX output validator ------------------------------------------------
 
 
@@ -328,8 +393,8 @@ def test_chat_write_outside_permissions_is_denied_and_retried(tmp_path):
     assert not (tmp_path / "elsewhere" / "x.md").exists()
 
 
-def test_chat_can_search_list_and_read_notes(tmp_path):
-    """The Growth PM can search, list by tag and read notes through its tools"""
+def test_chat_can_search_and_read_notes(tmp_path):
+    """The Growth PM can search and read notes through its own tools"""
     kb = MarkdownKnowledgeBase(tmp_path)
     kb.write("notes/a.md", "---\ntags: [x]\n---\nalpha content")
     squad = ProductSquad(
@@ -337,12 +402,33 @@ def test_chat_can_search_list_and_read_notes(tmp_path):
         context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("search_notes", {"query": "alpha"}),
-            _call_tool("list_by_tag", {"tag": "x"}),
             _call_tool("read_note", {"path": "notes/a.md"}),
             _text("Found it."),
         ),
     )
     assert squad.chat("Look into alpha") == "Found it."
+
+
+def test_hx_can_list_notes_by_tag(tmp_path):
+    """HX can list notes by tag through its own tools (not declared on the Growth PM)"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/a.md", "---\ntags: [x]\n---\nalpha content")
+    answer = HXAnswer(
+        question="q",
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.GAP, sources=[])],
+    )
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("consult_hx", {"question": "What do we know about x?"}),
+            _call_tool("list_by_tag", {"tag": "x"}),
+            _call_output_tool(answer),
+            _text("Done."),
+        ),
+    )
+    assert squad.chat("Look into x") == "Done."
 
 
 def test_chat_write_requires_approval_then_resumes(tmp_path):

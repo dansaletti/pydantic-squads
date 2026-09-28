@@ -90,27 +90,35 @@ def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, appro
 
 
 def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
-    """Register search/read/list_by_tag/write tools scoped to `role.permissions`."""
+    """Register only the note tools listed in `role.tools`, scoped to `role.permissions`."""
 
-    @agent.tool
-    def search_notes(ctx: RunContext[KnowledgeBase], query: str) -> list[Note]:
-        """Search the knowledge base for notes matching `query`."""
-        return _search_notes(role, ctx.deps, query)
+    if "search_notes" in role.tools:
 
-    @agent.tool
-    def list_by_tag(ctx: RunContext[KnowledgeBase], tag: str) -> list[Note]:
-        """List notes carrying `tag`."""
-        return _list_by_tag(role, ctx.deps, tag)
+        @agent.tool
+        def search_notes(ctx: RunContext[KnowledgeBase], query: str) -> list[Note]:
+            """Search the knowledge base for notes matching `query`."""
+            return _search_notes(role, ctx.deps, query)
 
-    @agent.tool
-    def read_note(ctx: RunContext[KnowledgeBase], path: str) -> Note:
-        """Read a single note by its path."""
-        return _read_note(role, ctx.deps, path)
+    if "list_by_tag" in role.tools:
 
-    @agent.tool
-    def write_note(ctx: RunContext[KnowledgeBase], path: str, content: str) -> str:
-        """Write a note by its path. Some paths require human approval first."""
-        return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)
+        @agent.tool
+        def list_by_tag(ctx: RunContext[KnowledgeBase], tag: str) -> list[Note]:
+            """List notes carrying `tag`."""
+            return _list_by_tag(role, ctx.deps, tag)
+
+    if "read_note" in role.tools:
+
+        @agent.tool
+        def read_note(ctx: RunContext[KnowledgeBase], path: str) -> Note:
+            """Read a single note by its path."""
+            return _read_note(role, ctx.deps, path)
+
+    if "write_note" in role.tools:
+
+        @agent.tool
+        def write_note(ctx: RunContext[KnowledgeBase], path: str, content: str) -> str:
+            """Write a note by its path. Some paths require human approval first."""
+            return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)
 
 
 def _sources_exist(kb: KnowledgeBase, output: HXAnswer) -> HXAnswer:
@@ -136,7 +144,10 @@ async def _consult_hx(hx_agent: Agent[KnowledgeBase, HXAnswer], kb: KnowledgeBas
     return result.output
 
 
-def _register_consult_hx(pm_agent: Agent[KnowledgeBase, Any], hx_agent: Agent[KnowledgeBase, Any]) -> None:
+def _register_consult_hx(pm_agent: Agent[KnowledgeBase, Any], pm_role: Role, hx_agent: Agent[KnowledgeBase, Any]) -> None:
+    if "consult_hx" not in pm_role.tools:
+        return
+
     @pm_agent.tool
     async def consult_hx(ctx: RunContext[KnowledgeBase], question: str) -> HXAnswer:
         """Ask HX a question about users; returns cited findings, each classified as evidence, assumption or gap."""
@@ -176,7 +187,7 @@ def _build_agents(squad: Squad, model: Any, context: str, language: Language) ->
     )
     _register_note_tools(po, squad["product_owner"])
 
-    _register_consult_hx(growth_pm, hx)
+    _register_consult_hx(growth_pm, squad["growth_pm"], hx)
     return growth_pm, hx, po
 
 
