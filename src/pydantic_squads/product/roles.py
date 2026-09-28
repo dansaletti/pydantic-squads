@@ -36,6 +36,7 @@ GROWTH_PM = Role(
     talks_to=[HUMAN, "hx", "product_owner"],
     tools=["consult_hx", "search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/bets/**"], write_with_approval=["docs/**", "assumptions/**"]),
+    skills=["prioritization"],
     delivers="A founder-approved Bet: hypothesis, metric, scope and assumptions.",
 )
 
@@ -69,6 +70,7 @@ HX = Role(
     # consult_hx tool, with no path back to the founder for approval
     # (ADR 0004). It proposes assumption updates in its findings instead.
     permissions=Permissions(write=["squad/hx/**"]),
+    skills=["evidence-classification"],
     delivers="An HXAnswer: cited findings, each classified as evidence, assumption or gap.",
 )
 
@@ -93,5 +95,6 @@ PRODUCT_OWNER = Role(
     talks_to=["growth_pm"],
     tools=["search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/backlog/**"]),
+    skills=["user-stories"],
     delivers="A Backlog with stories and acceptance criteria, or a justified SendBack.",
 )

@@ -1,4 +1,19 @@
-from pydantic_squads.product.roles import GROWTH_PM, HX
+from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
+
+
+def test_growth_pm_declares_its_skill():
+    """The Growth PM declares the prioritization skill"""
+    assert GROWTH_PM.skills == ["prioritization"]
+
+
+def test_hx_declares_its_skill():
+    """HX declares the evidence-classification skill"""
+    assert HX.skills == ["evidence-classification"]
+
+
+def test_product_owner_declares_its_skill():
+    """The Product Owner declares the user-stories skill"""
+    assert PRODUCT_OWNER.skills == ["user-stories"]
 
 
 def test_growth_pm_can_write_assumptions_with_approval():
