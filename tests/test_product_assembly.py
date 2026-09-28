@@ -37,6 +37,8 @@ from pydantic_squads.product.knowledge import MarkdownKnowledgeBase
 
 pydantic_ai_models.ALLOW_MODEL_REQUESTS = False
 
+TEST_CONTEXT = "A B2B tool for small logistics companies. Primary persona: dispatch manager."
+
 
 def _role(read: list[str] | None = None, write: list[str] | None = None, write_with_approval: list[str] | None = None) -> Role:
     return Role(
@@ -316,7 +318,7 @@ def test_consult_hx_raises_when_hx_defers():
 def test_chat_returns_growth_pm_reply(tmp_path):
     """chat() sends the message to the Growth PM and returns its text reply"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(kb, model=_scripted_model(_text("Hi founder, what's on your mind?")))
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("Hi founder, what's on your mind?")))
     assert squad.chat("Hey") == "Hi founder, what's on your mind?"
 
 
@@ -325,6 +327,7 @@ def test_chat_writes_note_in_write_glob(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("write_note", {"path": "squad/bets/x.md", "content": "draft"}),
             _text("Saved the draft."),
@@ -339,6 +342,7 @@ def test_chat_write_outside_permissions_is_denied_and_retried(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("write_note", {"path": "elsewhere/x.md", "content": "nope"}),
             _text("Sorry, I can't write there."),
@@ -354,6 +358,7 @@ def test_chat_can_search_list_and_read_notes(tmp_path):
     kb.write("notes/a.md", "---\ntags: [x]\n---\nalpha content")
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("search_notes", {"query": "alpha"}),
             _call_tool("list_by_tag", {"tag": "x"}),
@@ -369,6 +374,7 @@ def test_chat_write_requires_approval_then_resumes(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("write_note", {"path": "docs/context.md", "content": "new context"}),
             _text("Wrote it after approval."),
@@ -394,6 +400,7 @@ def test_consult_hx_delegates_to_hx_agent(tmp_path):
     )
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_tool("consult_hx", {"question": "Why do users churn?"}),
             _call_output_tool(answer),
@@ -401,6 +408,58 @@ def test_consult_hx_delegates_to_hx_agent(tmp_path):
         ),
     )
     assert squad.chat("Why are users churning?") == "HX says step 3 confuses users."
+
+
+# -- ProductSquad: context is included in every agent's instructions ------
+
+
+def _system_prompt(messages) -> str:
+    """Extract the SystemPromptPart content pydantic_ai sends for `system_prompt=...`."""
+    for part in messages[0].parts:
+        if type(part).__name__ == "SystemPromptPart":
+            return part.content
+    raise AssertionError("no SystemPromptPart found in the first request")
+
+
+def test_growth_pm_and_hx_instructions_include_product_context(tmp_path):
+    """Both the Growth PM's and HX's instructions include the given product context"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("interviews/a.md", "evidence")
+    answer = HXAnswer(
+        question="q",
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=["interviews/a.md"])],
+    )
+    captured_prompts = []
+
+    def fn(messages, info):
+        captured_prompts.append(_system_prompt(messages))
+        if len(captured_prompts) == 1:
+            return ModelResponse(parts=[ToolCallPart("consult_hx", {"question": "q"})])
+        if len(captured_prompts) == 2:
+            return _call_output_tool(answer)(messages, info)
+        return ModelResponse(parts=[TextPart("done")])
+
+    squad = ProductSquad(kb, model=FunctionModel(fn), context=TEST_CONTEXT)
+    squad.chat("hi")
+    assert len(captured_prompts) == 3
+    assert TEST_CONTEXT in captured_prompts[0]  # Growth PM
+    assert TEST_CONTEXT in captured_prompts[1]  # HX
+
+
+def test_product_owner_instructions_include_product_context(tmp_path):
+    """The Product Owner's instructions include the given product context"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
+    captured = {}
+
+    def fn(messages, info):
+        captured["prompt"] = _system_prompt(messages)
+        return _call_output_tool(backlog)(messages, info)
+
+    squad = ProductSquad(kb, model=FunctionModel(fn), context=TEST_CONTEXT)
+    squad.submit_bet(_bet())
+    assert TEST_CONTEXT in captured["prompt"]
 
 
 # -- ProductSquad: close_bet() / submit_bet() ------------------------------
@@ -421,7 +480,7 @@ def test_close_bet_forces_structured_bet_output(tmp_path):
     """close_bet() asks the Growth PM to produce a structured Bet"""
     kb = MarkdownKnowledgeBase(tmp_path)
     bet = _bet()
-    squad = ProductSquad(kb, model=_scripted_model(_call_output_tool(bet)))
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(bet)))
     assert squad.close_bet() == bet
 
 
@@ -429,7 +488,7 @@ def test_submit_bet_returns_backlog(tmp_path):
     """submit_bet() hands the bet to the Product Owner and returns its Backlog"""
     kb = MarkdownKnowledgeBase(tmp_path)
     backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"])])
-    squad = ProductSquad(kb, model=_scripted_model(_call_output_tool(backlog)))
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(backlog)))
     assert squad.submit_bet(_bet()) == backlog
 
 
@@ -440,6 +499,7 @@ def test_submit_bet_returns_revised_bet_without_resubmitting_to_po(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         # Only 2 turns: PO(SendBack), PM(revise). A 3rd call (a second PO
         # run) would overrun the script and fail the test.
         model=_scripted_model(_call_output_tool(send_back), _call_output_tool(revised_bet)),
@@ -456,6 +516,7 @@ def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path)
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_output_tool(send_back),  # PO, first submission
             _call_output_tool(revised_bet),  # PM revises
@@ -470,7 +531,7 @@ def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path)
 def test_submit_bet_needs_a_bet_unless_resuming(tmp_path):
     """submit_bet() without a bet and without a pending revision is a usage error"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(kb, model=_scripted_model())
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())
     with pytest.raises(ValueError):
         squad.submit_bet()
 
@@ -481,6 +542,7 @@ def test_submit_bet_revision_can_defer_for_approval(tmp_path):
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         model=_scripted_model(
             _call_output_tool(send_back),
             _call_tool("write_note", {"path": "docs/context.md", "content": "notes"}),
@@ -497,6 +559,7 @@ def test_submit_bet_resume_after_deferred_revision_does_not_call_po_again(tmp_pa
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
+        context=TEST_CONTEXT,
         # Exactly 3 turns: PO(SendBack), PM(defers on write_note), PM(resumed
         # -> Bet). A stray 4th call (an unexpected PO re-run) would overrun
         # the script and fail the test.

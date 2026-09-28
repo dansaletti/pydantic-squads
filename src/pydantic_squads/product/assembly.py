@@ -149,12 +149,19 @@ def _register_consult_hx(pm_agent: Agent[KnowledgeBase, Any], hx_agent: Agent[Kn
         return await _consult_hx(hx_agent, ctx.deps, ctx.usage, question)
 
 
-def _build_agents(squad: Squad, model: Any) -> tuple[Agent, Agent, Agent]:
+_CONTEXT_HEADING: dict[Language, str] = {"en": "Product context", "pt-BR": "Contexto do produto"}
+
+
+def _with_context(instructions: str, context: str, language: Language) -> str:
+    return f"{instructions}\n\n## {_CONTEXT_HEADING[language]}\n{context}"
+
+
+def _build_agents(squad: Squad, model: Any, context: str, language: Language) -> tuple[Agent, Agent, Agent]:
     growth_pm = Agent(
         model,
         deps_type=KnowledgeBase,
         output_type=[str, DeferredToolRequests],
-        system_prompt=squad.instructions_for("growth_pm"),
+        system_prompt=_with_context(squad.instructions_for("growth_pm"), context, language),
     )
     _register_note_tools(growth_pm, squad["growth_pm"])
 
@@ -162,7 +169,7 @@ def _build_agents(squad: Squad, model: Any) -> tuple[Agent, Agent, Agent]:
         model,
         deps_type=KnowledgeBase,
         output_type=[HXAnswer, DeferredToolRequests],
-        system_prompt=squad.instructions_for("hx"),
+        system_prompt=_with_context(squad.instructions_for("hx"), context, language),
     )
     _register_note_tools(hx, squad["hx"])
     _register_source_validator(hx)
@@ -171,7 +178,7 @@ def _build_agents(squad: Squad, model: Any) -> tuple[Agent, Agent, Agent]:
         model,
         deps_type=KnowledgeBase,
         output_type=[Backlog, SendBack],
-        system_prompt=squad.instructions_for("product_owner"),
+        system_prompt=_with_context(squad.instructions_for("product_owner"), context, language),
     )
     _register_note_tools(po, squad["product_owner"])
 
@@ -191,6 +198,10 @@ def _send_back_prompt(send_back: SendBack) -> str:
 
 class ProductSquad:
     """A running instance of the product squad, backed by one knowledge base.
+
+    `context` is free text describing the product (audience, domain, current
+    focus); it's appended to all three agents' instructions (ADR 0003) so
+    they don't have to rediscover it from the knowledge base every time.
 
     `chat()` talks to the Growth PM. `close_bet()` asks it to turn the
     conversation so far into a `Bet`, for the founder to review outside this
@@ -214,11 +225,12 @@ class ProductSquad:
         self,
         kb: KnowledgeBase,
         model: Any,
+        context: str,
         language: Language = "en",
     ) -> None:
         self.kb = kb
         squad = build_product_squad(language)
-        self._growth_pm, self._hx, self._po = _build_agents(squad, model)
+        self._growth_pm, self._hx, self._po = _build_agents(squad, model, context, language)
         self._history: list[ModelMessage] = []
         self._pending_send_back: SendBack | None = None
 
