@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 [project.urls]
-Source = "https://github.com/danilotsg/pydantic-squads"
+Source = "https://github.com/dansaletti/pydantic-squads"
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov"]
