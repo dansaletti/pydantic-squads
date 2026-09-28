@@ -82,7 +82,11 @@ class MarkdownKnowledgeBase:
             rel = p.relative_to(self.root)
             if any(part.startswith(".") for part in rel.parts):
                 continue  # skip dotfiles/dotfolders like .trash, .obsidian
-            notes.append(self.read(str(rel)))
+            try:
+                notes.append(self.read(str(rel)))
+            except (OSError, ValueError):
+                continue  # skip notes that can't be read: a directory, a
+                # broken symlink, or one whose target escapes the vault root
         return notes
 
 

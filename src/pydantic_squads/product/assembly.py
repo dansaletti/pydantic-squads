@@ -70,8 +70,8 @@ def _read_note(role: Role, kb: KnowledgeBase, path: str) -> Note:
         raise ModelRetry(f"not permitted to read '{path}'")
     try:
         return kb.read(normalized)
-    except FileNotFoundError:
-        raise ModelRetry(f"note '{normalized}' does not exist") from None
+    except (OSError, ValueError):
+        raise ModelRetry(f"note '{normalized}' does not exist or cannot be read") from None
 
 
 def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, approved: bool) -> str:
@@ -126,7 +126,7 @@ def _sources_exist(kb: KnowledgeBase, output: HXAnswer) -> HXAnswer:
         for source in finding.sources:
             try:
                 kb.read(source)
-            except (FileNotFoundError, OSError, ValueError):
+            except (OSError, ValueError):
                 raise ModelRetry(f"source '{source}' does not exist in the knowledge base") from None
     return output
 

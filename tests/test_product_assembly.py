@@ -145,6 +145,25 @@ def test_read_note_missing_note_raises_model_retry_not_file_not_found_error(tmp_
         _read_note(_role(read=["**"]), kb, "public/missing.md")
 
 
+def test_read_note_directory_raises_model_retry_not_os_error(tmp_path):
+    """read_note converts a directory matching the path into ModelRetry, never a raw OSError"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    (tmp_path / "adir.md").mkdir()
+    with pytest.raises(ModelRetry):
+        _read_note(_role(read=["**"]), kb, "adir.md")
+
+
+def test_read_note_symlink_escaping_root_raises_model_retry_not_value_error(tmp_path):
+    """read_note converts a symlink escaping the vault into ModelRetry, never a raw ValueError"""
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("secret")
+    kb = MarkdownKnowledgeBase(tmp_path)
+    (tmp_path / "escape.md").symlink_to(outside / "secret.md")
+    with pytest.raises(ModelRetry):
+        _read_note(_role(read=["**"]), kb, "escape.md")
+
+
 def test_write_note_free_write(tmp_path):
     """write_note writes directly to a path covered by the write permission"""
     kb = MarkdownKnowledgeBase(tmp_path)
@@ -325,6 +344,35 @@ def test_sources_exist_retries_when_source_missing(tmp_path):
         question="q",
         summary="s",
         findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=["notes/missing.md"])],
+    )
+    with pytest.raises(ModelRetry):
+        _sources_exist(kb, answer)
+
+
+def test_sources_exist_retries_when_source_is_a_directory(tmp_path):
+    """The HX output validator raises ModelRetry when a cited source is a directory, not a note"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    (tmp_path / "adir.md").mkdir()
+    answer = HXAnswer(
+        question="q",
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=["adir.md"])],
+    )
+    with pytest.raises(ModelRetry):
+        _sources_exist(kb, answer)
+
+
+def test_sources_exist_retries_when_source_escapes_root(tmp_path):
+    """The HX output validator raises ModelRetry when a cited source resolves outside the vault"""
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("secret")
+    kb = MarkdownKnowledgeBase(tmp_path)
+    (tmp_path / "escape.md").symlink_to(outside / "secret.md")
+    answer = HXAnswer(
+        question="q",
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=["escape.md"])],
     )
     with pytest.raises(ModelRetry):
         _sources_exist(kb, answer)

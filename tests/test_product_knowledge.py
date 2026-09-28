@@ -83,6 +83,33 @@ def test_read_still_works_for_a_note_inside_a_dotfolder(tmp_path):
     assert kb.read(".trash/deleted.md").content == "still readable directly"
 
 
+def test_all_notes_skips_a_directory_matching_the_md_glob(tmp_path):
+    """search/list_by_tag skip an entry that matches *.md but is actually a directory"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("keep.md", "alpha content")
+    (tmp_path / "oops.md").mkdir()
+    assert [n.path for n in kb.search("alpha")] == ["keep.md"]
+
+
+def test_all_notes_skips_a_broken_symlink(tmp_path):
+    """search/list_by_tag skip a note whose file can't be read, like a broken symlink"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("keep.md", "alpha content")
+    (tmp_path / "broken.md").symlink_to(tmp_path / "does-not-exist.md")
+    assert [n.path for n in kb.search("alpha")] == ["keep.md"]
+
+
+def test_all_notes_skips_a_symlink_escaping_the_root(tmp_path):
+    """search/list_by_tag skip a note whose symlink target resolves outside the vault root"""
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("alpha content")
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("keep.md", "alpha content")
+    (tmp_path / "escape.md").symlink_to(outside / "secret.md")
+    assert [n.path for n in kb.search("alpha")] == ["keep.md"]
+
+
 def test_write_then_read_round_trips(tmp_path):
     """A note written to the vault can be read back with its frontmatter"""
     kb = MarkdownKnowledgeBase(tmp_path)
