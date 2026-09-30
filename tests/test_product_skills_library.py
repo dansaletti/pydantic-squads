@@ -29,3 +29,8 @@ def test_user_stories_skill_has_skill_md_and_a_reference_file():
     """The user-stories skill ships a SKILL.md naming itself and at least one references/ file"""
     assert "name: user-stories" in _skill_md("user-stories")
     assert _has_reference_file("user-stories")
+
+
+def test_user_stories_skill_explains_needs_design():
+    """The user-stories skill tells the Product Owner how to set needs_design"""
+    assert "needs_design" in _skill_md("user-stories")

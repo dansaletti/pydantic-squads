@@ -21,8 +21,13 @@ criteria that are actually testable.
 3. Write acceptance criteria as testable statements — each one must be
    something a person can verify true or false by using the product, not a
    description of the implementation.
-4. Anything the bet's `out_of_scope` excludes must not turn into a story,
+4. Set `needs_design` on every story. It is `true` when the story changes
+   what a user sees or does (a new screen, a new state, a changed flow or
+   message) and `false` when it is backend-only (storage, jobs,
+   integrations with no visible change). The Designer prototypes every
+   `true` story and nothing else, so when in doubt, mark it `true`.
+5. Anything the bet's `out_of_scope` excludes must not turn into a story,
    even a small one.
-5. If the bet is too ambiguous to split — the scope is unclear, or a story
+6. If the bet is too ambiguous to split — the scope is unclear, or a story
    would require inventing requirements the bet never stated — that is a
    `SendBack`, not a guess.

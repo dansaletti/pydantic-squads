@@ -573,7 +573,7 @@ def test_growth_pm_and_hx_instructions_include_product_context(tmp_path):
 def test_product_owner_instructions_include_product_context(tmp_path):
     """The Product Owner's instructions include the given product context"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=True)])
     captured = {}
 
     def fn(messages, info):
@@ -610,7 +610,7 @@ def test_close_bet_forces_structured_bet_output(tmp_path):
 def test_submit_bet_returns_backlog(tmp_path):
     """submit_bet() hands the bet to the Product Owner and returns its Backlog"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"])])
+    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"], needs_design=True)])
     squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(backlog)))
     assert squad.submit_bet(_bet()) == backlog
 
@@ -637,7 +637,7 @@ def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path)
     """The founder must call submit_bet(revision.bet) to actually reach the PO"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     revised_bet = _bet(scope=["Signup wizard", "web only"])
-    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=True)])
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,

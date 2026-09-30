@@ -29,3 +29,8 @@ def test_growth_pm_can_still_write_docs_with_approval():
 def test_hx_has_no_write_with_approval():
     """HX has no write_with_approval permission: it cannot request approval (ADR 0004)"""
     assert HX.permissions.write_with_approval == []
+
+
+def test_product_owner_marks_needs_design():
+    """The Product Owner is responsible for deciding each story's needs_design"""
+    assert any("needs_design" in r for r in PRODUCT_OWNER.responsibilities)

@@ -81,6 +81,7 @@ PRODUCT_OWNER = Role(
     responsibilities=[
         "Split the bet into small, independent user stories",
         "Write testable acceptance criteria for each story",
+        "Mark each story needs_design when it changes what a user sees or does; backend-only stories do not",
         "Define the minimum scope and explicitly list what is out",
         "Respect decisions recorded in ADRs",
         "Send the bet back to the Growth PM when it is too ambiguous to become stories",
