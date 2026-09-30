@@ -1,4 +1,4 @@
-"""Ready-made product squad: Growth PM, HX researcher, Product Owner.
+"""Ready-made product squad: Growth PM, HX researcher, Product Owner, Designer.
 
 Consuming projects supply only a `KnowledgeBase` (ADR 0003); roles and
 contracts are fixed.
@@ -27,10 +27,11 @@ from pydantic_squads.product.contracts import (
     design_coverage_errors,
 )
 from pydantic_squads.product.knowledge import KnowledgeBase, MarkdownKnowledgeBase, Note, format_note
-from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
+from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
 from pydantic_squads.product.squad import Language, build_product_squad
 
 __all__ = [
+    "DESIGNER",
     "GROWTH_PM",
     "HX",
     "PRODUCT_OWNER",

@@ -3,7 +3,7 @@
 from typing import Literal
 
 from pydantic_squads import EN, PT_BR, PromptTemplate, Squad
-from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
+from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
 
 Language = Literal["en", "pt-BR"]
 
@@ -15,7 +15,7 @@ _DIRECTIVES: dict[Language, str] = {
 
 
 def build_product_squad(language: Language = "en") -> Squad:
-    """Build the product squad (Growth PM, HX, Product Owner) in `language`.
+    """Build the product squad (Growth PM, HX, Product Owner, Designer) in `language`.
 
     Role content stays in English; `language` only selects the instruction
     labels and adds a directive so the agent answers in that language.
@@ -23,6 +23,6 @@ def build_product_squad(language: Language = "en") -> Squad:
     directive = _DIRECTIVES[language]
     roles = [
         role.model_copy(update={"principles": [*role.principles, directive]})
-        for role in (GROWTH_PM, HX, PRODUCT_OWNER)
+        for role in (GROWTH_PM, HX, PRODUCT_OWNER, DESIGNER)
     ]
     return Squad(name="Product", roles=roles, template=_TEMPLATES[language])

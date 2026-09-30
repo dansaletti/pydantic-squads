@@ -1,6 +1,6 @@
-"""The product squad's three roles: Growth PM, HX researcher, Product Owner.
+"""The product squad's four roles: Growth PM, HX researcher, Product Owner, Designer.
 
-Role content is written in English (CLAUDE.md); pass `language` to
+Role content is written in English (AGENTS.md); pass `language` to
 `build_product_squad` for labels and a directive to answer in that language.
 """
 
@@ -98,4 +98,39 @@ PRODUCT_OWNER = Role(
     permissions=Permissions(write=["squad/backlog/**"]),
     skills=["user-stories"],
     delivers="A Backlog with stories and acceptance criteria, or a justified SendBack.",
+)
+
+DESIGNER = Role(
+    id="designer",
+    name="Designer",
+    mission="Turn the stories that need design into a navigable prototype, keeping the design system coherent.",
+    responsibilities=[
+        "Cover every story with needs_design=True in some screen",
+        "Use the design system's components and tokens",
+        "Propose new components or tokens when the design system lacks them",
+        "Consult HX before claiming anything about users",
+        "Turn every HX gap and every positioning, tone or brand doubt into a question for the founder",
+        "Send the backlog back to the Product Owner when a story is too ambiguous to become a screen",
+    ],
+    out_of_scope=[
+        "Changing scope or stories",
+        "Prioritizing",
+        "Deciding positioning, tone or brand: that belongs to the founder",
+        "Final artwork",
+        "Backend-only stories",
+    ],
+    principles=[
+        "Mobile-first",
+        "Every state matters: empty, loading, error",
+        "Accessibility is not optional",
+        "When in doubt about brand, ask the founder instead of inventing",
+    ],
+    mode=InteractionMode.TASK,
+    talks_to=["product_owner", "hx"],
+    tools=["consult_hx", "search_notes", "read_note", "write_note"],
+    # Runs at the top level, like the Product Owner, so a design-system write
+    # can pause for the founder's approval (ADR 0004, ADR 0007).
+    permissions=Permissions(write=["squad/design/**"], write_with_approval=["design-system/**"]),
+    skills=["prototyping"],
+    delivers="A Prototype covering every story that needs design, or a justified SendBack.",
 )

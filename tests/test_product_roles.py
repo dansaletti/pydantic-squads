@@ -1,4 +1,5 @@
-from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
+from pydantic_squads import HUMAN, InteractionMode
+from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
 
 
 def test_growth_pm_declares_its_skill():
@@ -34,3 +35,26 @@ def test_hx_has_no_write_with_approval():
 def test_product_owner_marks_needs_design():
     """The Product Owner is responsible for deciding each story's needs_design"""
     assert any("needs_design" in r for r in PRODUCT_OWNER.responsibilities)
+
+
+def test_designer_is_a_task_role_that_never_talks_to_the_human():
+    """The Designer receives a Backlog and delivers a Prototype, without talking to the human"""
+    assert DESIGNER.mode == InteractionMode.TASK
+    assert HUMAN not in DESIGNER.talks_to
+    assert set(DESIGNER.talks_to) == {"product_owner", "hx"}
+
+
+def test_designer_declares_its_skill():
+    """The Designer loads the prototyping skill"""
+    assert DESIGNER.skills == ["prototyping"]
+
+
+def test_designer_can_consult_hx():
+    """The Designer has the consult_hx tool"""
+    assert "consult_hx" in DESIGNER.tools
+
+
+def test_designer_writes_design_notes_freely_and_the_design_system_with_approval():
+    """The Designer writes squad/design/** freely and design-system/** only with approval"""
+    assert DESIGNER.permissions.write == ["squad/design/**"]
+    assert DESIGNER.permissions.write_with_approval == ["design-system/**"]
