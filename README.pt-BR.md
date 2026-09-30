@@ -8,6 +8,24 @@ Squads de agentes declarativas e validadas, sobre o [Pydantic AI](https://ai.pyd
 
 A maioria dos frameworks multiagentes foca em como os agentes *executam*. O `pydantic-squads` foca em como uma squad é *definida*: quem é cada agente, o que ele não deve fazer, com quem fala, onde pode escrever e o que entrega para quem. As definições são modelos Pydantic comuns, validados na criação e testáveis sem chamar um LLM.
 
+## Instalação
+
+Ainda não está no PyPI; instale a partir do GitHub. Requer Python 3.10+.
+
+```bash
+pip install "pydantic-squads @ git+https://github.com/dansaletti/pydantic-squads"
+```
+
+O core depende só do `pydantic`. Extras opcionais, combinados como
+`"pydantic-squads[ai,skills] @ git+https://github.com/dansaletti/pydantic-squads"`:
+
+| Extra | Adiciona |
+|-------|----------|
+| `ai` | Roda a squad de produto como agentes Pydantic AI de verdade (`pydantic-ai-slim`) |
+| `skills` | Agent Skills por papel (`pydantic-ai-skills`) |
+| `observability` | O visualizador local `pydantic-squads trace` (`rich`); use junto com `ai` |
+| `otel` | Exportação opcional para OpenTelemetry / Logfire (`logfire`); use junto com `ai` |
+
 ## Conceitos
 
 - **Role (papel)**: missão, responsabilidades, fora do escopo, princípios, modo de interação, com quem fala, ferramentas e permissões do agente. As instruções de sistema são geradas a partir desses dados, então existe uma única fonte da verdade.
@@ -18,9 +36,28 @@ A maioria dos frameworks multiagentes foca em como os agentes *executam*. O `pyd
 - **Permissões**: padrões glob sobre a base de conhecimento para leitura, escrita e escrita com aprovação humana.
 - **Skills**: o `skills` de um papel nomeia as [Agent Skills](https://agentskills.io/home) que ele pode carregar, e `scripts` (`never`/`approval`/`free`) define como ele pode rodar os scripts que vêm junto. Ligar isso a um agente de verdade fica em `pydantic_squads.product` (veja abaixo).
 
-## Papéis em português
+## Visão rápida
 
-Use o template `PT_BR` para que os rótulos das instruções fiquem em português:
+```python
+from pydantic_squads import HUMAN, InteractionMode, Role, Squad
+
+lead = Role(
+    id="lead",
+    name="Líder",
+    mission="Ajudar o humano a decidir o que fazer a seguir.",
+    responsibilities=["Discutir opções com o humano", "Delegar pesquisa"],
+    out_of_scope=["Tomar a decisão final"],
+    mode=InteractionMode.CONVERSATIONAL,
+    talks_to=[HUMAN, "researcher"],
+    delivers="Uma decisão aprovada.",
+)
+# ... defina "researcher" com mode=InteractionMode.DELEGATE
+
+squad = Squad(name="Produto", roles=[lead, researcher])
+print(squad.instructions_for("lead"))
+```
+
+Papéis escritos em outro idioma podem usar um `PromptTemplate` correspondente (o `PT_BR` já vem embutido):
 
 ```python
 from pydantic_squads import PT_BR, Squad
@@ -43,14 +80,17 @@ print(squad.instructions_for("growth_pm"))
 
 ### Rodando de verdade (extra `ai`)
 
-`pip install "pydantic-squads[ai]"` (apoiado no [pydantic-ai-slim](https://ai.pydantic.dev),
-não no pacote `pydantic-ai` completo) monta a squad em agentes de verdade: o
+O extra `ai` (veja [Instalação](#instalação); apoiado no
+[pydantic-ai-slim](https://ai.pydantic.dev), não no pacote `pydantic-ai`
+completo) monta a squad em agentes de verdade: o
 `ProductSquad` conversa com o Growth PM, que pode consultar a HX (achados
 citados, validados contra a base de conhecimento) e escrever notas dentro
 das suas `Permissions`. Uma escrita num caminho `write_with_approval` pausa
 a execução e devolve um `DeferredToolRequests` em vez de quebrar, para que
 um humano decida antes de qualquer escrita. A própria HX não pode pedir
 aprovação — veja a [ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md).
+Passe `language="pt-BR"` para ter os rótulos das instruções em português
+(padrão `"en"`).
 
 ```python
 from pydantic_ai import DeferredToolRequests
@@ -63,6 +103,7 @@ squad = ProductSquad(
     kb,
     model="openai:gpt-4o",
     context="Ferramenta B2B para pequenas empresas de logística. Persona principal: gestor de despacho.",
+    language="pt-BR",
 )
 
 resposta = squad.chat("Estamos perdendo usuários no cadastro, o que sabemos?")
@@ -95,7 +136,7 @@ Cada papel pode carregar [Agent Skills](https://agentskills.io/home) —
 pacotes `SKILL.md` com `references/`, `assets/` e `scripts/` — restritas ao
 seu próprio `Role.skills`; o Growth PM, a HX e o Product Owner já trazem
 uma cada (`prioritization`, `evidence-classification`, `user-stories`), e um
-projeto pode adicionar as suas. `pip install "pydantic-squads[skills]"`
+projeto pode adicionar as suas. O extra `skills`
 traz o [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 usado em vez do `Skills` embutido do Pydantic AI porque esse só carrega as
 instruções do `SKILL.md`, não os arquivos que ele referencia — veja a
@@ -142,7 +183,9 @@ squad = ProductSquad(
 )
 ```
 
-Retome uma conversa passada e continue com `chat()`:
+Retome uma conversa passada e continue com `chat()`. O `cycle_id` é o nome
+do arquivo de trace (`{trace_dir}/<cycle_id>.jsonl`) e também aparece no
+frontmatter das notas de Bet do ciclo:
 
 ```python
 squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")
@@ -152,7 +195,7 @@ squad.chat("...")
 
 ### Visualizador de trace local (extra `observability`)
 
-`pip install "pydantic-squads[ai,observability]"` adiciona uma CLI baseada em `rich`:
+Os extras `ai` e `observability` adicionam uma CLI baseada em `rich`:
 
 ```bash
 pydantic-squads trace <cycle_id> --trace-dir ./traces --budget-tokens 20000
@@ -162,10 +205,12 @@ Ela imprime uma timeline por span, duração/tokens/custo por agente, e sinaliza
 spans lentos, retries da HX causados por uma fonte que não existe na base de
 conhecimento, devoluções do Product Owner, aprovações humanas pendentes, e
 tokens de entrada acima de `--budget-tokens` (verificado por ciclo e por span).
+`--trace-dir` usa `$PYDANTIC_SQUADS_TRACE_DIR` por padrão, ou `traces`;
+`--slow-threshold-ms` define o que conta como lento (padrão 5000).
 
 ### Exportação OpenTelemetry / Logfire (extra `otel`, desligado por padrão)
 
-`pip install "pydantic-squads[ai,otel]"` adiciona uma ativação explícita:
+Os extras `ai` e `otel` adicionam uma ativação explícita:
 
 ```python
 from pydantic_squads.product.otel import enable_otel
@@ -181,7 +226,13 @@ enable_otel(send_to_logfire=True)  # ou False, para exportar para seu próprio c
 > acesso antes. É independente do trace local em JSONL/CLI acima, que nunca
 > sai da máquina local.
 
-Veja o roadmap em [docs/roadmap.md](docs/roadmap.md).
+## Roadmap
+
+Veja [docs/roadmap.md](docs/roadmap.md).
+
+## Relacionados
+
+O [pydantic-team](https://github.com/Etiqa/pydantic-team) oferece padrões de time em runtime (hierárquico, colaborativo) para o Pydantic AI. Os dois são complementares: os papéis montados pelo `pydantic-squads` são agentes Pydantic AI comuns.
 
 ## Desenvolvimento
 
@@ -190,7 +241,12 @@ uv sync  # adicione --extra ai para tests/test_product_assembly.py e tests/test_
          # --extra skills para tests/test_product_skills.py,
          # --extra observability para tests/test_cli.py, --extra otel para tests/test_product_otel.py
 uv run pytest
+uv run pytest --cov=pydantic_squads --cov-report=term-missing  # a cobertura fica em 100%
 ```
+
+As regras do projeto para contribuidores e agentes de código (ADRs,
+convenções de teste, quais módulos podem importar o quê) estão no
+[AGENTS.md](AGENTS.md).
 
 ## Licença
 

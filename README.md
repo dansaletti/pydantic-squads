@@ -8,6 +8,24 @@ Declarative, validated agent squads on top of [Pydantic AI](https://ai.pydantic.
 
 Most multi-agent frameworks focus on how agents *run*. `pydantic-squads` focuses on how a squad is *defined*: who each agent is, what it must not do, who it talks to, what it may write, and what it hands off to whom. Definitions are plain Pydantic models, so they are validated at construction time and testable without calling an LLM.
 
+## Installation
+
+Not on PyPI yet; install from GitHub. Requires Python 3.10+.
+
+```bash
+pip install "pydantic-squads @ git+https://github.com/dansaletti/pydantic-squads"
+```
+
+The core depends only on `pydantic`. Optional extras, combined as
+`"pydantic-squads[ai,skills] @ git+https://github.com/dansaletti/pydantic-squads"`:
+
+| Extra | Adds |
+|-------|------|
+| `ai` | Runs the product squad as real Pydantic AI agents (`pydantic-ai-slim`) |
+| `skills` | Per-role Agent Skills (`pydantic-ai-skills`) |
+| `observability` | The `pydantic-squads trace` local viewer (`rich`); use with `ai` |
+| `otel` | Opt-in OpenTelemetry / Logfire export (`logfire`); use with `ai` |
+
 ## Concepts
 
 - **Role**: an agent's mission, responsibilities, out-of-scope items, principles, interaction mode, who it talks to, tools and permissions. Its system instructions are rendered from this data, so there is a single source of truth.
@@ -62,14 +80,17 @@ print(squad.instructions_for("growth_pm"))
 
 ### Running it (the `ai` extra)
 
-`pip install "pydantic-squads[ai]"` (backed by [pydantic-ai-slim](https://ai.pydantic.dev),
-not the full `pydantic-ai` package) assembles the squad into real agents:
+The `ai` extra (see [Installation](#installation); backed by
+[pydantic-ai-slim](https://ai.pydantic.dev), not the full `pydantic-ai`
+package) assembles the squad into real agents:
 `ProductSquad` talks to the Growth PM, which can consult HX (cited findings,
 validated against the knowledge base) and write notes within its
 `Permissions`. A write to a `write_with_approval` path pauses the run and
 hands you back a `DeferredToolRequests` instead of crashing, so a human
 decides before anything is written. HX itself cannot request approval — see
-[ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md).
+[ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md). Pass
+`language="pt-BR"` to get the instruction labels in Portuguese (default
+`"en"`).
 
 ```python
 from pydantic_ai import DeferredToolRequests
@@ -114,7 +135,7 @@ Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
 packages with `references/`, `assets/` and `scripts/` — scoped to its own
 `Role.skills`; the Growth PM, HX and the Product Owner each ship one
 (`prioritization`, `evidence-classification`, `user-stories`), and a
-project can add its own. `pip install "pydantic-squads[skills]"` pulls in
+project can add its own. The `skills` extra pulls in
 [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 used instead of Pydantic AI's own built-in `Skills` because that one only
 loads a `SKILL.md`'s instructions, not the files it points to — see
@@ -160,7 +181,9 @@ squad = ProductSquad(
 )
 ```
 
-Reload a past conversation and keep going with `chat()`:
+Reload a past conversation and keep going with `chat()`. The `cycle_id` is
+the name of its trace file (`{trace_dir}/<cycle_id>.jsonl`), and it is also
+in the frontmatter of the cycle's Bet notes:
 
 ```python
 squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")
@@ -170,7 +193,7 @@ squad.chat("...")
 
 ### Local trace viewer (the `observability` extra)
 
-`pip install "pydantic-squads[ai,observability]"` adds a `rich`-based CLI:
+The `ai` and `observability` extras add a `rich`-based CLI:
 
 ```bash
 pydantic-squads trace <cycle_id> --trace-dir ./traces --budget-tokens 20000
@@ -180,10 +203,12 @@ It prints a per-span timeline, per-agent duration/tokens/cost, and flags:
 slow spans, HX retries caused by a source that doesn't exist in the
 knowledge base, Product Owner send-backs, pending human approvals, and
 input tokens over `--budget-tokens` (checked both per cycle and per span).
+`--trace-dir` defaults to `$PYDANTIC_SQUADS_TRACE_DIR`, or `traces`;
+`--slow-threshold-ms` sets what counts as slow (default 5000).
 
 ### OpenTelemetry / Logfire export (the `otel` extra, off by default)
 
-`pip install "pydantic-squads[ai,otel]"` adds an explicit opt-in:
+The `ai` and `otel` extras add an explicit opt-in:
 
 ```python
 from pydantic_squads.product.otel import enable_otel
@@ -213,7 +238,11 @@ uv sync  # add --extra ai for tests/test_product_assembly.py and tests/test_prod
          # --extra skills for tests/test_product_skills.py,
          # --extra observability for tests/test_cli.py, --extra otel for tests/test_product_otel.py
 uv run pytest
+uv run pytest --cov=pydantic_squads --cov-report=term-missing  # coverage stays at 100%
 ```
+
+Project rules for contributors and coding agents (ADRs, test conventions,
+which modules may import what) are in [AGENTS.md](AGENTS.md).
 
 ## License
 
