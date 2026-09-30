@@ -97,6 +97,20 @@ def test_build_report_flags_product_owner_send_backs(tmp_path):
     assert [s.span_id for s in report.po_send_backs] == ["s1"]
 
 
+def test_build_report_flags_designer_send_backs_separately(tmp_path):
+    """build_report flags Designer SendBacks apart from the Product Owner's"""
+    spans = [
+        _span(span_id="s1", agent="designer", output_type="SendBack"),
+        _span(span_id="s2", agent="designer", output_type="Prototype"),
+        _span(span_id="s3", agent="product_owner", output_type="SendBack"),
+    ]
+    _record_cycle(tmp_path, "cycle-designer", spans)
+
+    report = build_report("cycle-designer", tmp_path)
+
+    assert [s.span_id for s in report.designer_send_backs] == ["s1"]
+    assert [s.span_id for s in report.po_send_backs] == ["s3"]
+
 def test_build_report_flags_pending_approvals(tmp_path):
     """build_report flags tool spans still awaiting a human approval"""
     spans = [
@@ -187,6 +201,7 @@ def test_print_report_renders_the_timeline_metrics_and_diagnostics(tmp_path, cap
     assert "Per-agent metrics" in out
     assert "Diagnostics" in out
     assert "exceed budget" in out
+    assert "Designer send-backs: 0" in out
 
 
 def test_main_trace_prints_a_report_and_returns_zero(tmp_path, capsys):
