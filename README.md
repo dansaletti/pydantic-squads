@@ -4,9 +4,11 @@
 
 Declarative, validated agent squads on top of [Pydantic AI](https://ai.pydantic.dev).
 
-> Early stage (pre-alpha). The API will change. Not affiliated with the Pydantic team.
+> Early stage (pre-alpha): the declarative core and the ready-made product squad both run today, but the API will change. Not affiliated with the Pydantic team.
 
 Most multi-agent frameworks focus on how agents *run*. `pydantic-squads` focuses on how a squad is *defined*: who each agent is, what it must not do, who it talks to, what it may write, and what it hands off to whom. Definitions are plain Pydantic models, so they are validated at construction time and testable without calling an LLM.
+
+It also ships a ready-made [product squad](#product-squad) that runs end to end on Pydantic AI: from a conversation with the founder to a bet, a backlog of stories, and a clickable HTML prototype.
 
 ## Installation
 
@@ -67,7 +69,8 @@ squad = Squad(name="Produto", roles=[...], template=PT_BR)
 ## Product squad
 
 `pydantic_squads.product` ships a ready-made squad — Growth PM, HX
-researcher, Product Owner — with typed hand-off contracts (see ADR 0003).
+researcher, Product Owner, Designer — with typed hand-off contracts (see
+ADR 0003). The flow is conversation → `Bet` → `Backlog` → `Prototype`.
 Consuming projects supply only a knowledge base; roles and contracts are
 fixed.
 
@@ -129,12 +132,43 @@ while isinstance(outcome, Revision):
 # needed write approval).
 ```
 
+### Designing it
+
+The Product Owner marks each story `needs_design` (required, no default).
+`design()` hands the backlog to the Designer, which turns every story that
+needs design into a self-contained, mobile-first HTML prototype in
+`squad/design/<cycle_id>/`, consulting HX about users along the way. A
+deterministic gate checks that every such story is on some screen before
+the prototype is accepted. See
+[ADR 0007](docs/adr/0007-designer-role.md).
+
+```python
+from pydantic_squads.product import Prototype
+
+result = squad.design(outcome)  # None if no story needs design
+if isinstance(result, DeferredToolRequests):
+    # The first time, the Designer proposes a design system; writing to
+    # design-system/** waits for your approval.
+    result = squad.design(deferred_tool_results=result.build_results(approve_all=True))
+
+if isinstance(result, Prototype):
+    print(result.html_path)  # open it in a browser
+    for q in result.founder_questions:  # also in questions.md, next to the HTML
+        print(q.question, "— default:", q.suggested_default)
+    # Brand, tone and positioning are yours to decide: keys are the questions'
+    # text, and unanswered ones keep the Designer's suggested default.
+    result = squad.design(outcome, answers={"Which tone?": "Friendly, informal"})
+```
+
+A story too ambiguous to design comes back as a `SendBack`, to you, not
+automatically to the Product Owner.
+
 ### Skills (the `skills` extra)
 
 Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
 packages with `references/`, `assets/` and `scripts/` — scoped to its own
-`Role.skills`; the Growth PM, HX and the Product Owner each ship one
-(`prioritization`, `evidence-classification`, `user-stories`), and a
+`Role.skills`; every role ships one (`prioritization`,
+`evidence-classification`, `user-stories`, `prototyping`), and a
 project can add its own. The `skills` extra pulls in
 [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 used instead of Pydantic AI's own built-in `Skills` because that one only
@@ -160,7 +194,7 @@ always free.
 ## Observability
 
 See [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). A cycle
-is one conversation → `Bet` → `Backlog` arc. Pass `trace_dir` to
+is one conversation → `Bet` → `Backlog` → `Prototype` arc. Pass `trace_dir` to
 `ProductSquad` to record every call as spans (agent, model/tool calls,
 tokens, real cost, status) into `{trace_dir}/{cycle_id}.jsonl`, one
 append-only file per cycle — including HX's own spans, nested under the
