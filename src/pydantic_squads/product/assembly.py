@@ -6,6 +6,9 @@ this package imports this module, so it works without `pydantic_ai` installed.
 """
 
 import fnmatch
+import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -16,12 +19,22 @@ from pydantic_ai import (
     DeferredToolResults,
     ModelRetry,
     RunContext,
+    UsageLimits,
 )
 from pydantic_ai.messages import ModelMessage
 
 from pydantic_squads import Role, Squad
-from pydantic_squads.product.contracts import Backlog, Bet, HXAnswer, Revision, SendBack
-from pydantic_squads.product.knowledge import KnowledgeBase, Note
+from pydantic_squads.product.contracts import Backlog, Bet, BetRecord, HXAnswer, Revision, SendBack, Span
+from pydantic_squads.product.knowledge import KnowledgeBase, Note, format_note
+from pydantic_squads.product.observability import (
+    CycleRecorder,
+    SpanSink,
+    deserialize_history,
+    extract_spans,
+    load_cycle,
+    merge_nested_spans,
+    serialize_history,
+)
 from pydantic_squads.product.squad import Language, build_product_squad
 
 
@@ -137,21 +150,40 @@ def _register_source_validator(agent: Agent[KnowledgeBase, HXAnswer]) -> None:
         return _sources_exist(ctx.deps, output)
 
 
-async def _consult_hx(hx_agent: Agent[KnowledgeBase, HXAnswer], kb: KnowledgeBase, usage: Any, question: str) -> HXAnswer:
+async def _consult_hx(
+    hx_agent: Agent[KnowledgeBase, HXAnswer],
+    kb: KnowledgeBase,
+    usage: Any,
+    question: str,
+    *,
+    tool_call_id: str | None = None,
+    sink: SpanSink | None = None,
+) -> HXAnswer:
     # Nested calls must use `run`, not `run_sync`: pydantic_ai forbids a nested
     # sync run inside a tool, since it could deadlock the outer run's event loop.
     result = await hx_agent.run(question, deps=kb, usage=usage)
+    # `sink` (ADR 0006) is how the outer run's span extraction later finds
+    # HX's own spans: they never appear in the Growth PM's `all_messages()`.
+    if sink is not None and tool_call_id is not None:
+        sink.nested_runs[tool_call_id] = ("hx", result.all_messages())
     return result.output
 
 
-def _register_consult_hx(pm_agent: Agent[KnowledgeBase, Any], pm_role: Role, hx_agent: Agent[KnowledgeBase, Any]) -> None:
+def _register_consult_hx(
+    pm_agent: Agent[KnowledgeBase, Any],
+    pm_role: Role,
+    hx_agent: Agent[KnowledgeBase, Any],
+    sink_box: list[SpanSink | None],
+) -> None:
     if "consult_hx" not in pm_role.tools:
         return
 
     @pm_agent.tool
     async def consult_hx(ctx: RunContext[KnowledgeBase], question: str) -> HXAnswer:
         """Ask HX a question about users; returns cited findings, each classified as evidence, assumption or gap."""
-        return await _consult_hx(hx_agent, ctx.deps, ctx.usage, question)
+        return await _consult_hx(
+            hx_agent, ctx.deps, ctx.usage, question, tool_call_id=ctx.tool_call_id, sink=sink_box[0]
+        )
 
 
 _CONTEXT_HEADING: dict[Language, str] = {"en": "Product context", "pt-BR": "Contexto do produto"}
@@ -176,7 +208,7 @@ def _skill_kwargs(build_role_skills: Any, all_skills_dirs: list[Path] | None, ro
 
 def _build_agents(
     squad: Squad, model: Any, context: str, language: Language, skills_dirs: list[Path] | None
-) -> tuple[Agent, Agent, Agent]:
+) -> tuple[Agent, Agent, Agent, list[SpanSink | None]]:
     # Imported lazily and only when skills are actually requested, so the `ai`
     # extra alone (skills_dirs=None, the default) never needs the `skills`
     # extra installed.
@@ -215,8 +247,37 @@ def _build_agents(
     )
     _register_note_tools(po, squad["product_owner"])
 
-    _register_consult_hx(growth_pm, squad["growth_pm"], hx)
-    return growth_pm, hx, po
+    sink_box: list[SpanSink | None] = [None]
+    _register_consult_hx(growth_pm, squad["growth_pm"], hx, sink_box)
+    return growth_pm, hx, po, sink_box
+
+
+def _resolution_spans(
+    deferred_tool_results: DeferredToolResults, agent: str, started_at: datetime
+) -> list[Span]:
+    """One zero-duration span per approval/denial resolved by a `deferred_tool_results` call.
+
+    A tool call's own span was recorded as `awaiting_approval` on the turn
+    that deferred it; extracting spans from just this turn's `new_messages()`
+    never sees that original tool call again, so the resolution needs its
+    own record to show up in a trace (ADR 0006).
+    """
+    spans = []
+    for tool_call_id, resolution in (deferred_tool_results.approvals or {}).items():
+        approved = resolution is True or getattr(resolution, "kind", None) == "tool-approved"
+        spans.append(
+            Span(
+                span_id=uuid.uuid4().hex,
+                agent=agent,
+                operation="approval_resolution",
+                tool_call_id=tool_call_id,
+                started_at=started_at,
+                duration_ms=0.0,
+                status="ok" if approved else "error",
+                detail="approved" if approved else "denied",
+            )
+        )
+    return spans
 
 
 def _send_back_prompt(send_back: SendBack) -> str:
@@ -260,6 +321,26 @@ class ProductSquad:
     (needs the `skills` extra only when this is not `None`). Each agent only
     ever sees the skills listed in its own `Role.skills`. See
     `pydantic_squads.product.skills_integration` and ADR 0005.
+
+    `usage_limits` (a `pydantic_ai.UsageLimits`) is passed to every agent run
+    in this squad; `None` (the default) keeps today's unlimited behavior.
+
+    `trace_dir`, when set, turns on observability (ADR 0006): every call
+    records spans (agent, model/tool calls, tokens, cost, status — with
+    HX's nested `consult_hx` run attributed as child spans) to
+    `{trace_dir}/{cycle_id}.jsonl`, one file per cycle. A stable `cycle_id`
+    is generated for the whole conversation→Bet→Backlog arc regardless of
+    whether `trace_dir` is set, since it's also written into the frontmatter
+    of every Bet note (see below). Inspect a trace with the
+    `pydantic-squads trace <cycle_id>` CLI (`observability` extra), or call
+    `resume(cycle_id)` on a fresh `ProductSquad` to reload a past
+    conversation and continue it with `chat()`.
+
+    `close_bet()` and a `submit_bet()` revision both write the closed `Bet`
+    to `squad/bets/<bet_version_id>.md` in the knowledge base,
+    deterministically (not left to the Growth PM to remember via
+    `write_note`), with `cycle_id`, `schema_version` and `bet_version_id` —
+    plus `previous_bet_version_id` on a revision — in its frontmatter.
     """
 
     def __init__(
@@ -269,12 +350,21 @@ class ProductSquad:
         context: str,
         language: Language = "en",
         skills_dirs: list[Path] | None = None,
+        usage_limits: UsageLimits | None = None,
+        trace_dir: Path | str | None = None,
     ) -> None:
         self.kb = kb
         squad = build_product_squad(language)
-        self._growth_pm, self._hx, self._po = _build_agents(squad, model, context, language, skills_dirs)
+        self._growth_pm, self._hx, self._po, self._sink_box = _build_agents(
+            squad, model, context, language, skills_dirs
+        )
         self._history: list[ModelMessage] = []
         self._pending_send_back: SendBack | None = None
+        self._usage_limits = usage_limits
+        self._trace_dir = Path(trace_dir) if trace_dir is not None else None
+        self._cycle_id: str | None = None
+        self._recorder: CycleRecorder | None = None
+        self._last_bet_version_id: str | None = None
 
     def chat(
         self, message: str | None = None, *, deferred_tool_results: DeferredToolResults | None = None
@@ -285,29 +375,19 @@ class ProductSquad:
         `DeferredToolRequests` — pass its resolution as `deferred_tool_results`
         instead of a new message.
         """
-        result = self._growth_pm.run_sync(
-            message,
-            deps=self.kb,
-            message_history=self._history,
-            deferred_tool_results=deferred_tool_results,
-        )
-        self._history = result.all_messages()
-        return result.output
+        return self._run_pm(message, deferred_tool_results=deferred_tool_results)
 
     def close_bet(
         self, *, deferred_tool_results: DeferredToolResults | None = None
     ) -> Bet | DeferredToolRequests:
         """Ask the Growth PM to close the conversation so far into a `Bet`."""
         prompt = None if deferred_tool_results else "Close the current discussion into a Bet."
-        result = self._growth_pm.run_sync(
-            prompt,
-            deps=self.kb,
-            message_history=self._history,
-            output_type=[Bet, DeferredToolRequests],
-            deferred_tool_results=deferred_tool_results,
+        output = self._run_pm(
+            prompt, output_type=[Bet, DeferredToolRequests], deferred_tool_results=deferred_tool_results
         )
-        self._history = result.all_messages()
-        return result.output
+        if isinstance(output, Bet):
+            self._write_bet_record(output)
+        return output
 
     def submit_bet(
         self, bet: Bet | None = None, *, deferred_tool_results: DeferredToolResults | None = None
@@ -333,8 +413,7 @@ class ProductSquad:
             raise ValueError("submit_bet() needs a Bet unless resuming a deferred bet revision")
 
         self._pending_send_back = None
-        po_result = self._po.run_sync(bet.model_dump_json(), deps=self.kb)
-        output = po_result.output
+        output = self._run_po(bet.model_dump_json())
         if isinstance(output, Backlog):
             return output
         return self._revise_bet(output)
@@ -343,16 +422,134 @@ class ProductSquad:
         self, send_back: SendBack, *, deferred_tool_results: DeferredToolResults | None = None
     ) -> Revision | DeferredToolRequests:
         pm_prompt = None if deferred_tool_results else _send_back_prompt(send_back)
-        pm_result = self._growth_pm.run_sync(
-            pm_prompt,
+        output = self._run_pm(
+            pm_prompt, output_type=[Bet, DeferredToolRequests], deferred_tool_results=deferred_tool_results
+        )
+        if isinstance(output, DeferredToolRequests):
+            self._pending_send_back = send_back
+            return output
+        self._pending_send_back = None
+        self._write_bet_record(output)
+        return Revision(bet=output, send_back=send_back)
+
+    def resume(self, cycle_id: str) -> None:
+        """Reload a past cycle's conversation from `trace_dir` and continue with `chat()`.
+
+        Needs `trace_dir` to have been set on `__init__`. Restores
+        `message_history` and `cycle_id` only — it never calls the model.
+        """
+        if self._trace_dir is None:
+            raise ValueError("resume() needs trace_dir to be set")
+        _header, _spans, snapshot = load_cycle(self._trace_dir, cycle_id)
+        self._history = deserialize_history(snapshot.message_history_json)
+        self._cycle_id = cycle_id
+        self._recorder = CycleRecorder(self._trace_dir, cycle_id)
+
+    def _ensure_cycle(self) -> None:
+        if self._cycle_id is None:
+            self._cycle_id = uuid.uuid4().hex
+        if self._trace_dir is not None and self._recorder is None:
+            self._recorder = CycleRecorder(self._trace_dir, self._cycle_id)
+            self._recorder.start()
+
+    def _run_pm(
+        self,
+        prompt: str | None,
+        *,
+        output_type: Any = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+    ) -> Any:
+        self._ensure_cycle()
+        sink = SpanSink()
+        self._sink_box[0] = sink
+        started = time.monotonic()
+        kwargs: dict[str, Any] = dict(
             deps=self.kb,
             message_history=self._history,
-            output_type=[Bet, DeferredToolRequests],
+            deferred_tool_results=deferred_tool_results,
+            usage_limits=self._usage_limits,
+        )
+        if output_type is not None:
+            kwargs["output_type"] = output_type
+        try:
+            result = self._growth_pm.run_sync(prompt, **kwargs)
+        finally:
+            self._sink_box[0] = None
+        duration_ms = (time.monotonic() - started) * 1000
+        new_messages = result.new_messages()
+        self._history = result.all_messages()
+        self._record_run(
+            "growth_pm",
+            new_messages,
+            sink,
+            duration_ms,
+            type(result.output).__name__,
             deferred_tool_results=deferred_tool_results,
         )
-        self._history = pm_result.all_messages()
-        if isinstance(pm_result.output, DeferredToolRequests):
-            self._pending_send_back = send_back
-            return pm_result.output
-        self._pending_send_back = None
-        return Revision(bet=pm_result.output, send_back=send_back)
+        return result.output
+
+    def _run_po(self, prompt: str) -> Any:
+        self._ensure_cycle()
+        started = time.monotonic()
+        result = self._po.run_sync(prompt, deps=self.kb, usage_limits=self._usage_limits)
+        duration_ms = (time.monotonic() - started) * 1000
+        self._record_run(
+            "product_owner", result.new_messages(), SpanSink(), duration_ms, type(result.output).__name__
+        )
+        return result.output
+
+    def _record_run(
+        self,
+        agent: str,
+        messages: list[ModelMessage],
+        sink: SpanSink,
+        wall_clock_ms: float,
+        output_type_name: str,
+        *,
+        deferred_tool_results: DeferredToolResults | None = None,
+    ) -> None:
+        # `messages` is this call's own `new_messages()`, not the cumulative
+        # history — extracting from the full history every call would
+        # re-record every prior turn's spans again on each new call.
+        if self._recorder is None:
+            return
+        started_at = messages[0].timestamp if messages else datetime.now(timezone.utc)
+        inner_spans = merge_nested_spans(extract_spans(messages, agent=agent, output_type=output_type_name), sink)
+        if deferred_tool_results is not None:
+            inner_spans = [*_resolution_spans(deferred_tool_results, agent, started_at), *inner_spans]
+        run_span_id = uuid.uuid4().hex
+        run_span = Span(
+            span_id=run_span_id,
+            agent=agent,
+            operation="agent_run",
+            started_at=started_at,
+            duration_ms=wall_clock_ms,
+            status="ok",
+        )
+        nested = [
+            span.model_copy(update={"parent_span_id": run_span_id}) if span.parent_span_id is None else span
+            for span in inner_spans
+        ]
+        self._recorder.record_spans([run_span, *nested])
+        self._recorder.record_snapshot(serialize_history(self._history))
+
+    def _write_bet_record(self, bet: Bet) -> None:
+        assert self._cycle_id is not None  # _ensure_cycle() always runs before this
+        bet_version_id = uuid.uuid4().hex
+        record = BetRecord(
+            bet_version_id=bet_version_id,
+            previous_bet_version_id=self._last_bet_version_id,
+            cycle_id=self._cycle_id,
+            bet=bet,
+            created_at=datetime.now(timezone.utc),
+        )
+        frontmatter: dict[str, str | list[str]] = {
+            "cycle_id": record.cycle_id,
+            "schema_version": str(record.schema_version),
+            "bet_version_id": record.bet_version_id,
+        }
+        if record.previous_bet_version_id is not None:
+            frontmatter["previous_bet_version_id"] = record.previous_bet_version_id
+        content = format_note(frontmatter, record.bet.model_dump_json(indent=2))
+        self.kb.write(f"squad/bets/{bet_version_id}.md", content)
+        self._last_bet_version_id = bet_version_id

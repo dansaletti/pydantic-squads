@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -13,6 +14,8 @@ from pydantic_ai import (
     DeferredToolRequests,
     ModelRetry,
     RunUsage,
+    UsageLimitExceeded,
+    UsageLimits,
     models as pydantic_ai_models,
 )
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -312,7 +315,7 @@ def test_consult_hx_registered_when_role_declares_it():
 
     pm_agent = Agent(FunctionModel(fn), deps_type=str)
     hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
-    _register_consult_hx(pm_agent, GROWTH_PM, hx_agent)
+    _register_consult_hx(pm_agent, GROWTH_PM, hx_agent, [None])
     pm_agent.run_sync("hi", deps="kb")
     assert "consult_hx" in captured["names"]
 
@@ -327,7 +330,7 @@ def test_consult_hx_not_registered_when_role_does_not_declare_it():
 
     po_agent = Agent(FunctionModel(fn), deps_type=str)
     hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
-    _register_consult_hx(po_agent, PRODUCT_OWNER, hx_agent)
+    _register_consult_hx(po_agent, PRODUCT_OWNER, hx_agent, [None])
     po_agent.run_sync("hi", deps="kb")
     assert captured["names"] == []
 
@@ -699,3 +702,177 @@ def test_submit_bet_resume_after_deferred_revision_does_not_call_po_again(tmp_pa
     assert resumed.bet == revised_bet
     assert resumed.send_back == send_back
     assert kb.read("docs/context.md").content == "notes"
+
+
+# -- ProductSquad: observability (ADR 0006) --------------------------------
+
+
+def test_chat_with_trace_dir_writes_a_cycle_jsonl_file(tmp_path):
+    """chat() with trace_dir set writes a {cycle_id}.jsonl trace file with a header, spans and a snapshot"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("hi")), trace_dir=trace_dir)
+
+    squad.chat("hey")
+
+    files = list(trace_dir.glob("*.jsonl"))
+    assert len(files) == 1
+    assert files[0].stem == squad._cycle_id
+    kinds = [json.loads(line)["kind"] for line in files[0].read_text().splitlines()]
+    assert kinds[0] == "CycleHeader"
+    assert kinds[-1] == "CycleSnapshot"
+    assert "Span" in kinds
+
+
+def test_chat_without_trace_dir_writes_no_trace_file_but_still_has_a_cycle_id(tmp_path):
+    """A ProductSquad without trace_dir still generates a cycle_id, just doesn't persist anything"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("hi")))
+
+    squad.chat("hey")
+
+    assert squad._cycle_id is not None
+    assert not (tmp_path / f"{squad._cycle_id}.jsonl").exists()
+
+
+def test_close_bet_writes_a_bet_note_with_frontmatter(tmp_path):
+    """close_bet() writes a squad/bets/<id>.md note carrying cycle_id/schema_version/bet_version_id"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    bet = _bet()
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(bet)))
+
+    squad.close_bet()
+
+    bet_notes = list((tmp_path / "squad" / "bets").glob("*.md"))
+    assert len(bet_notes) == 1
+    note = kb.read(f"squad/bets/{bet_notes[0].stem}.md")
+    assert note.frontmatter["cycle_id"] == squad._cycle_id
+    assert note.frontmatter["schema_version"] == "1"
+    assert note.frontmatter["bet_version_id"] == bet_notes[0].stem
+    assert "previous_bet_version_id" not in note.frontmatter
+    assert bet.hypothesis in note.content
+
+
+def test_bet_revision_note_carries_previous_bet_version_id(tmp_path):
+    """A revised Bet's note carries previous_bet_version_id pointing at the Bet it replaced"""
+    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
+    revised_bet = _bet(scope=["Signup wizard", "web only"])
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_output_tool(_bet()),  # close_bet()
+            _call_output_tool(send_back),  # PO sends it back
+            _call_output_tool(revised_bet),  # PM revises
+        ),
+    )
+    squad.close_bet()
+    before = {p.stem for p in (tmp_path / "squad" / "bets").glob("*.md")}
+
+    result = squad.submit_bet(_bet())
+
+    assert isinstance(result, Revision)
+    after = {p.stem for p in (tmp_path / "squad" / "bets").glob("*.md")}
+    new_id = next(iter(after - before))
+    first_id = next(iter(before))
+    note = kb.read(f"squad/bets/{new_id}.md")
+    assert note.frontmatter["previous_bet_version_id"] == first_id
+
+
+def test_resume_continues_a_conversation_from_a_saved_cycle(tmp_path):
+    """resume() reloads a saved cycle's history so a fresh ProductSquad's chat() continues it"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    first = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("Hi founder!")), trace_dir=trace_dir)
+    first.chat("hey")
+    cycle_id = first._cycle_id
+
+    captured = {}
+
+    def fn(messages, info):
+        captured["history_len"] = len(messages)
+        return ModelResponse(parts=[TextPart("continuing")])
+
+    second = ProductSquad(kb, context=TEST_CONTEXT, model=FunctionModel(fn), trace_dir=trace_dir)
+    second.resume(cycle_id)
+    reply = second.chat("still there?")
+
+    assert reply == "continuing"
+    assert second._cycle_id == cycle_id
+    assert captured["history_len"] > 1
+
+
+def test_resume_requires_trace_dir(tmp_path):
+    """resume() raises when trace_dir was never set on this ProductSquad"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())
+    with pytest.raises(ValueError, match="trace_dir"):
+        squad.resume("nope")
+
+
+def test_resumed_approval_is_recorded_as_a_resolution_span(tmp_path):
+    """Resuming a deferred write_note approval records an approval_resolution span in the trace"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("write_note", {"path": "docs/context.md", "content": "new context"}),
+            _text("Wrote it after approval."),
+        ),
+        trace_dir=trace_dir,
+    )
+    pending = squad.chat("Update the docs")
+    reply = squad.chat(deferred_tool_results=pending.build_results(approve_all=True))
+    assert reply == "Wrote it after approval."
+
+    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    resolution_spans = [
+        line["data"] for line in lines if line["kind"] == "Span" and line["data"]["operation"] == "approval_resolution"
+    ]
+    assert len(resolution_spans) == 1
+    assert resolution_spans[0]["status"] == "ok"
+    assert resolution_spans[0]["detail"] == "approved"
+
+
+def test_resumed_denial_is_recorded_as_a_resolution_span(tmp_path):
+    """Denying a deferred write_note approval records an approval_resolution span with status error"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("write_note", {"path": "docs/context.md", "content": "new context"}),
+            _text("Understood, not writing it."),
+        ),
+        trace_dir=trace_dir,
+    )
+    pending = squad.chat("Update the docs")
+    tool_call_id = pending.approvals[0].tool_call_id
+    reply = squad.chat(deferred_tool_results=pending.build_results(approvals={tool_call_id: False}))
+    assert reply == "Understood, not writing it."
+
+    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    resolution_spans = [
+        line["data"] for line in lines if line["kind"] == "Span" and line["data"]["operation"] == "approval_resolution"
+    ]
+    assert len(resolution_spans) == 1
+    assert resolution_spans[0]["status"] == "error"
+    assert resolution_spans[0]["detail"] == "denied"
+
+
+def test_usage_limits_is_enforced_within_a_call(tmp_path):
+    """usage_limits passed to ProductSquad is enforced by pydantic_ai on every agent run"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/a.md", "alpha")
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(_call_tool("search_notes", {"query": "alpha"}), _text("done")),
+        usage_limits=UsageLimits(request_limit=1),
+    )
+    with pytest.raises(UsageLimitExceeded):
+        squad.chat("look into alpha")

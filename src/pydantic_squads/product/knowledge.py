@@ -90,6 +90,25 @@ class MarkdownKnowledgeBase:
         return notes
 
 
+def format_note(frontmatter: dict[str, str | list[str]], content: str) -> str:
+    """Render frontmatter and content into markdown text `_parse_note` can read back.
+
+    The inverse of `_parse_frontmatter`, for the same tiny subset of YAML
+    (ADR 0001): scalar `key: value` lines and block `key:` + `  - item`
+    lists. Returns `content` unchanged when `frontmatter` is empty.
+    """
+    if not frontmatter:
+        return content
+    lines: list[str] = []
+    for key, value in frontmatter.items():
+        if isinstance(value, list):
+            lines.append(f"{key}:")
+            lines.extend(f"  - {item}" for item in value)
+        else:
+            lines.append(f"{key}: {value}")
+    return "---\n" + "\n".join(lines) + "\n---\n" + content
+
+
 def _parse_note(text: str) -> tuple[dict[str, str | list[str]], str]:
     match = _FRONTMATTER_RE.match(text)
     if not match:

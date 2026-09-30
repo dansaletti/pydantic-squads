@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from pydantic_squads.product import KnowledgeBase, MarkdownKnowledgeBase
+from pydantic_squads.product import KnowledgeBase, MarkdownKnowledgeBase, format_note
 
 VAULT = Path(__file__).parent / "fixtures" / "vault"
 
@@ -133,6 +133,22 @@ def test_note_without_frontmatter_has_empty_tags(tmp_path):
     note = kb.read("plain.md")
     assert note.tags == []
     assert note.content == "just body text"
+
+
+def test_format_note_round_trips_through_a_written_and_read_note(tmp_path):
+    """format_note renders text that read() parses back into the same frontmatter and content"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    text = format_note({"cycle_id": "abc123", "tags": ["bet", "onboarding"]}, "Hypothesis: ...")
+    kb.write("squad/bets/x.md", text)
+    note = kb.read("squad/bets/x.md")
+    assert note.frontmatter["cycle_id"] == "abc123"
+    assert note.tags == ["bet", "onboarding"]
+    assert note.content == "Hypothesis: ..."
+
+
+def test_format_note_with_no_frontmatter_returns_content_unchanged():
+    """format_note skips the frontmatter block entirely when given an empty dict"""
+    assert format_note({}, "just body text") == "just body text"
 
 
 def test_frontmatter_blank_line_is_ignored(tmp_path):

@@ -7,15 +7,20 @@ contracts are fixed.
 from pydantic_squads.product.contracts import (
     Backlog,
     Bet,
+    BetRecord,
+    CycleHeader,
+    CycleSnapshot,
     Finding,
     FindingKind,
     HXAnswer,
     POOutput,
     Revision,
     SendBack,
+    Span,
+    SpanStatus,
     Story,
 )
-from pydantic_squads.product.knowledge import KnowledgeBase, MarkdownKnowledgeBase, Note
+from pydantic_squads.product.knowledge import KnowledgeBase, MarkdownKnowledgeBase, Note, format_note
 from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
 from pydantic_squads.product.squad import Language, build_product_squad
 
@@ -25,6 +30,9 @@ __all__ = [
     "PRODUCT_OWNER",
     "Backlog",
     "Bet",
+    "BetRecord",
+    "CycleHeader",
+    "CycleSnapshot",
     "Finding",
     "FindingKind",
     "HXAnswer",
@@ -35,6 +43,9 @@ __all__ = [
     "POOutput",
     "Revision",
     "SendBack",
+    "Span",
+    "SpanStatus",
     "Story",
     "build_product_squad",
+    "format_note",
 ]

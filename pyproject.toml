@@ -18,12 +18,21 @@ classifiers = [
 [project.urls]
 Source = "https://github.com/dansaletti/pydantic-squads"
 
+[project.scripts]
+pydantic-squads = "pydantic_squads.cli:main"
+
 [project.optional-dependencies]
 ai = [
     "pydantic-ai-slim>=2.51.0",
 ]
 skills = [
     "pydantic-ai-skills>=2.0.0",
+]
+observability = [
+    "rich>=13.0",
+]
+otel = [
+    "logfire>=3.0",
 ]
 
 [dependency-groups]

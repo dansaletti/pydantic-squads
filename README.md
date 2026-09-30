@@ -136,6 +136,68 @@ the tool, `"approval"` defers it as a `DeferredToolRequests`, `"free"` runs
 it unwrapped. Reading a skill's bundled files with `read_skill_resource` is
 always free.
 
+## Observability
+
+See [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). A cycle
+is one conversation → `Bet` → `Backlog` arc. Pass `trace_dir` to
+`ProductSquad` to record every call as spans (agent, model/tool calls,
+tokens, real cost, status) into `{trace_dir}/{cycle_id}.jsonl`, one
+append-only file per cycle — including HX's own spans, nested under the
+Growth PM's `consult_hx` tool span. A stable `cycle_id` is generated either
+way, since it's also written into the frontmatter of every closed `Bet`'s
+note (`squad/bets/<bet_version_id>.md`, alongside `schema_version` and, on
+a revision, `previous_bet_version_id`).
+
+```python
+from pydantic_ai import UsageLimits
+
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="...",
+    usage_limits=UsageLimits(request_limit=20),  # None (default) is unlimited
+    trace_dir="./traces",
+)
+```
+
+Reload a past conversation and keep going with `chat()`:
+
+```python
+squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")
+squad.resume(cycle_id)
+squad.chat("...")
+```
+
+### Local trace viewer (the `observability` extra)
+
+`pip install "pydantic-squads[ai,observability]"` adds a `rich`-based CLI:
+
+```bash
+pydantic-squads trace <cycle_id> --trace-dir ./traces --budget-tokens 20000
+```
+
+It prints a per-span timeline, per-agent duration/tokens/cost, and flags:
+slow spans, HX retries caused by a source that doesn't exist in the
+knowledge base, Product Owner send-backs, pending human approvals, and
+input tokens over `--budget-tokens` (checked both per cycle and per span).
+
+### OpenTelemetry / Logfire export (the `otel` extra, off by default)
+
+`pip install "pydantic-squads[ai,otel]"` adds an explicit opt-in:
+
+```python
+from pydantic_squads.product.otel import enable_otel
+
+enable_otel(send_to_logfire=True)  # or False, to export to your own OTel collector
+```
+
+> **Warning:** this sends full conversation content — user messages, model
+> replies, tool call arguments, including knowledge-base note contents — to
+> whatever OpenTelemetry backend you configure. It is off by default and
+> must be enabled explicitly; review what that backend stores and who can
+> access it first. It's independent of the local JSONL/CLI trace above,
+> which never leaves the local machine.
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md).
@@ -147,7 +209,9 @@ See [docs/roadmap.md](docs/roadmap.md).
 ## Development
 
 ```bash
-uv sync  # add --extra ai for tests/test_product_assembly.py, --extra skills for tests/test_product_skills.py
+uv sync  # add --extra ai for tests/test_product_assembly.py and tests/test_product_observability.py,
+         # --extra skills for tests/test_product_skills.py,
+         # --extra observability for tests/test_cli.py, --extra otel for tests/test_product_otel.py
 uv run pytest
 ```
 

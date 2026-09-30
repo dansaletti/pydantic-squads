@@ -4,7 +4,9 @@ Plain pydantic models with no dependency on pydantic_ai (ADR 0001), so they
 are validated and tested without calling an LLM.
 """
 
+from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -99,3 +101,76 @@ class Revision(BaseModel):
 
     bet: Bet
     send_back: SendBack
+
+
+SpanStatus = Literal["ok", "retry", "error", "awaiting_approval"]
+"""How a span's step resolved: succeeded, was retried, failed, or is still waiting on a human."""
+
+
+class Span(BaseModel):
+    """One timed step of a cycle: a model call, or a single tool call within one.
+
+    Derived after the fact from a run's messages (`product.observability`,
+    ADR 0006), never constructed by an agent. `parent_span_id` nests a tool
+    call under the model call that made it, and nests HX's own spans under
+    the Growth PM's `consult_hx` tool span.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    span_id: str
+    parent_span_id: str | None = None
+    agent: Literal["growth_pm", "hx", "product_owner"]
+    operation: str
+    tool_call_id: str | None = None
+    started_at: datetime
+    duration_ms: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    status: SpanStatus
+    detail: str | None = None
+    output_type: str | None = None
+
+
+class CycleHeader(BaseModel):
+    """The first line of a cycle's trace file."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cycle_id: str
+    schema_version: int = 1
+    started_at: datetime
+
+
+class CycleSnapshot(BaseModel):
+    """The last line of a cycle's trace file: enough to resume `chat()`.
+
+    `message_history_json` is an opaque string here — only
+    `product.observability` (the `ai` extra) knows how to turn it back into
+    a list of `pydantic_ai` messages.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    cycle_id: str
+    schema_version: int = 1
+    message_history_json: str
+    ended_at: datetime
+
+
+class BetRecord(BaseModel):
+    """A closed `Bet`, as written to the knowledge base.
+
+    Kept separate from `Bet` itself: `Bet` is the Growth PM's LLM output
+    schema, and these bookkeeping ids are never something a model fills in.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    bet_version_id: str
+    previous_bet_version_id: str | None = None
+    cycle_id: str
+    schema_version: int = 1
+    bet: Bet
+    created_at: datetime

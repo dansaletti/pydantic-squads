@@ -117,12 +117,78 @@ do mesmo jeito que `write_with_approval` governa uma escrita de nota:
 `DeferredToolRequests`, `"free"` roda sem pedir aprovação. Ler os arquivos
 de uma skill com `read_skill_resource` é sempre livre.
 
+## Observabilidade
+
+Veja a [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). Um
+ciclo é um arco conversa → `Bet` → `Backlog`. Passe `trace_dir` para o
+`ProductSquad` para registrar cada chamada como spans (agente, chamadas de
+modelo/ferramenta, tokens, custo real, status) em
+`{trace_dir}/{cycle_id}.jsonl`, um arquivo append-only por ciclo — incluindo
+os próprios spans da HX, aninhados sob o span da tool `consult_hx` do Growth
+PM. Um `cycle_id` estável é gerado de qualquer forma, já que também é
+gravado no frontmatter da nota de cada Bet fechado
+(`squad/bets/<bet_version_id>.md`, junto com `schema_version` e, numa
+revisão, `previous_bet_version_id`).
+
+```python
+from pydantic_ai import UsageLimits
+
+squad = ProductSquad(
+    kb,
+    model="openai:gpt-4o",
+    context="...",
+    usage_limits=UsageLimits(request_limit=20),  # None (padrão) é ilimitado
+    trace_dir="./traces",
+)
+```
+
+Retome uma conversa passada e continue com `chat()`:
+
+```python
+squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")
+squad.resume(cycle_id)
+squad.chat("...")
+```
+
+### Visualizador de trace local (extra `observability`)
+
+`pip install "pydantic-squads[ai,observability]"` adiciona uma CLI baseada em `rich`:
+
+```bash
+pydantic-squads trace <cycle_id> --trace-dir ./traces --budget-tokens 20000
+```
+
+Ela imprime uma timeline por span, duração/tokens/custo por agente, e sinaliza:
+spans lentos, retries da HX causados por uma fonte que não existe na base de
+conhecimento, devoluções do Product Owner, aprovações humanas pendentes, e
+tokens de entrada acima de `--budget-tokens` (verificado por ciclo e por span).
+
+### Exportação OpenTelemetry / Logfire (extra `otel`, desligado por padrão)
+
+`pip install "pydantic-squads[ai,otel]"` adiciona uma ativação explícita:
+
+```python
+from pydantic_squads.product.otel import enable_otel
+
+enable_otel(send_to_logfire=True)  # ou False, para exportar para seu próprio coletor OTel
+```
+
+> **Aviso:** isso envia o conteúdo completo das conversas — mensagens do
+> usuário, respostas do modelo, argumentos de chamadas de ferramenta,
+> incluindo o conteúdo das notas da base de conhecimento — para qualquer
+> backend OpenTelemetry configurado. Vem desligado por padrão e precisa ser
+> ativado explicitamente; revise o que esse backend armazena e quem tem
+> acesso antes. É independente do trace local em JSONL/CLI acima, que nunca
+> sai da máquina local.
+
 Veja o roadmap em [docs/roadmap.md](docs/roadmap.md).
 
 ## Desenvolvimento
 
 ```bash
-uv sync  # adicione --extra ai para tests/test_product_assembly.py, --extra skills para tests/test_product_skills.py
+uv sync  # adicione --extra ai para tests/test_product_assembly.py e tests/test_product_observability.py,
+         # --extra skills para tests/test_product_skills.py,
+         # --extra observability para tests/test_cli.py, --extra otel para tests/test_product_otel.py
 uv run pytest
 ```
 
