@@ -27,7 +27,7 @@ from pydantic_ai.messages import (
 
 from pydantic_squads.product.contracts import CycleHeader, CycleSnapshot, Span
 
-AgentName = Literal["growth_pm", "hx", "product_owner"]
+AgentName = Literal["growth_pm", "hx", "product_owner", "designer"]
 
 
 @dataclass

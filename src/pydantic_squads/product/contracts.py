@@ -60,12 +60,17 @@ class Bet(BaseModel):
 
 
 class Story(BaseModel):
-    """A single user story with testable acceptance criteria."""
+    """A single user story with testable acceptance criteria.
+
+    `needs_design` has no default: the Product Owner decides, per story,
+    whether it changes what a user sees or does (ADR 0007).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     title: str
     acceptance_criteria: list[str] = Field(min_length=1)
+    needs_design: bool
 
 
 class Backlog(BaseModel):
@@ -77,7 +82,12 @@ class Backlog(BaseModel):
 
 
 class SendBack(BaseModel):
-    """The Product Owner's output when a bet is too ambiguous to become stories."""
+    """Sent instead of a deliverable when the input is too ambiguous to work from.
+
+    The Product Owner sends back a bet too ambiguous to become stories; the
+    Designer sends back a backlog with a story too ambiguous to become a
+    screen.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -103,6 +113,90 @@ class Revision(BaseModel):
     send_back: SendBack
 
 
+class Screen(BaseModel):
+    """One screen of a prototype and the stories it covers, by title."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    purpose: str
+    stories: list[str] = Field(default_factory=list)
+    components: list[str] = Field(default_factory=list)
+    states: list[str] = Field(min_length=1)
+
+
+class ComponentProposal(BaseModel):
+    """A design-system component or token the Designer proposes adding."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    reason: str
+    spec: str
+
+
+class FounderQuestion(BaseModel):
+    """A question only the founder can answer, with the Designer's suggested default.
+
+    `origin="hx_gap"` means HX had no answer: `hx_question` is the question
+    that was put to HX. `origin="positioning"` covers positioning, tone and
+    brand, which are the founder's call and never go through HX.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    question: str
+    context: str
+    origin: Literal["hx_gap", "positioning"]
+    suggested_default: str
+    hx_question: str | None = None
+
+    @model_validator(mode="after")
+    def _hx_question_matches_origin(self) -> "FounderQuestion":
+        if self.origin == "hx_gap" and not self.hx_question:
+            raise ValueError("an hx_gap question must reference the question put to HX")
+        if self.origin == "positioning" and self.hx_question is not None:
+            raise ValueError("a positioning question must not reference an HX question")
+        return self
+
+
+class Prototype(BaseModel):
+    """The Designer's output: a navigable HTML prototype and what it asks of the founder."""
+
+    model_config = ConfigDict(frozen=True)
+
+    screens: list[Screen] = Field(min_length=1)
+    html_path: str
+    design_system_changes: list[ComponentProposal] = Field(default_factory=list)
+    founder_questions: list[FounderQuestion] = Field(default_factory=list)
+
+
+DesignerOutput = Prototype | SendBack
+"""The Designer always delivers a `Prototype` or sends the backlog back."""
+
+
+def design_coverage_errors(backlog: Backlog, prototype: Prototype) -> list[str]:
+    """Why `prototype` doesn't cover `backlog`, or `[]` when it does.
+
+    Every story with `needs_design=True` must appear in some `Screen`, and
+    every story a `Screen` cites must exist in the backlog.
+    """
+    titles = {story.title for story in backlog.stories}
+    covered = {title for screen in prototype.screens for title in screen.stories}
+    errors = [
+        f"story '{story.title}' needs design but is in no screen"
+        for story in backlog.stories
+        if story.needs_design and story.title not in covered
+    ]
+    errors.extend(
+        f"screen '{screen.name}' cites unknown story '{title}'"
+        for screen in prototype.screens
+        for title in screen.stories
+        if title not in titles
+    )
+    return errors
+
+
 SpanStatus = Literal["ok", "retry", "error", "awaiting_approval"]
 """How a span's step resolved: succeeded, was retried, failed, or is still waiting on a human."""
 
@@ -120,7 +214,7 @@ class Span(BaseModel):
 
     span_id: str
     parent_span_id: str | None = None
-    agent: Literal["growth_pm", "hx", "product_owner"]
+    agent: Literal["growth_pm", "hx", "product_owner", "designer"]
     operation: str
     tool_call_id: str | None = None
     started_at: datetime

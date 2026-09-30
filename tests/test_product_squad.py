@@ -10,9 +10,9 @@ def test_default_language_is_english():
 
 
 def test_role_ids_are_stable():
-    """The product squad always has growth_pm, hx and product_owner"""
+    """The product squad always has growth_pm, hx, product_owner and designer"""
     squad = build_product_squad()
-    assert [r.id for r in squad.roles] == ["growth_pm", "hx", "product_owner"]
+    assert [r.id for r in squad.roles] == ["growth_pm", "hx", "product_owner", "designer"]
 
 
 def test_portuguese_language_selects_pt_br_template():

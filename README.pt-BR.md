@@ -4,9 +4,11 @@
 
 Squads de agentes declarativas e validadas, sobre o [Pydantic AI](https://ai.pydantic.dev).
 
-> Estágio inicial (pré-alpha). A API vai mudar. Sem afiliação com o time do Pydantic.
+> Estágio inicial (pré-alpha): o core declarativo e a squad de produto pronta já rodam, mas a API vai mudar. Sem afiliação com o time do Pydantic.
 
 A maioria dos frameworks multiagentes foca em como os agentes *executam*. O `pydantic-squads` foca em como uma squad é *definida*: quem é cada agente, o que ele não deve fazer, com quem fala, onde pode escrever e o que entrega para quem. As definições são modelos Pydantic comuns, validados na criação e testáveis sem chamar um LLM.
+
+A biblioteca também traz uma [squad de produto](#squad-de-produto) pronta que roda de ponta a ponta sobre o Pydantic AI: de uma conversa com o fundador até um bet, um backlog de histórias e um protótipo HTML navegável.
 
 ## Instalação
 
@@ -67,7 +69,8 @@ squad = Squad(name="Produto", roles=[...], template=PT_BR)
 ## Squad de produto
 
 `pydantic_squads.product` traz uma squad pronta — Growth PM, pesquisador(a)
-de HX, Product Owner — com contratos de handoff tipados (veja a ADR 0003).
+de HX, Product Owner, Designer — com contratos de handoff tipados (veja a
+ADR 0003). O fluxo é conversa → `Bet` → `Backlog` → `Prototype`.
 Projetos consumidores só fornecem uma base de conhecimento; papéis e
 contratos são fixos.
 
@@ -130,12 +133,43 @@ while isinstance(resultado, Revision):
 # revisão precisou de aprovação de escrita).
 ```
 
+### Desenhando
+
+O Product Owner marca cada história com `needs_design` (obrigatório, sem
+padrão). `design()` entrega o backlog ao Designer, que transforma cada
+história que precisa de design num protótipo HTML autocontido e
+mobile-first em `squad/design/<cycle_id>/`, consultando a HX sobre as
+usuárias no caminho. Um gate determinístico confere que toda história
+desse tipo aparece em alguma tela antes de aceitar o protótipo. Veja a
+[ADR 0007](docs/adr/0007-designer-role.md).
+
+```python
+from pydantic_squads.product import Prototype
+
+desenho = squad.design(resultado)  # None se nenhuma história precisar de design
+if isinstance(desenho, DeferredToolRequests):
+    # Na primeira vez, o Designer propõe um design system; escrever em
+    # design-system/** espera a sua aprovação.
+    desenho = squad.design(deferred_tool_results=desenho.build_results(approve_all=True))
+
+if isinstance(desenho, Prototype):
+    print(desenho.html_path)  # abra no navegador
+    for p in desenho.founder_questions:  # também em questions.md, ao lado do HTML
+        print(p.question, "— padrão:", p.suggested_default)
+    # Marca, tom e posicionamento são decisão sua: as chaves são o texto das
+    # perguntas, e as sem resposta mantêm o padrão sugerido pelo Designer.
+    desenho = squad.design(resultado, answers={"Qual tom?": "Amigável, informal"})
+```
+
+Uma história ambígua demais para virar tela volta como um `SendBack` para
+você, não automaticamente para o Product Owner.
+
 ### Skills (extra `skills`)
 
 Cada papel pode carregar [Agent Skills](https://agentskills.io/home) —
 pacotes `SKILL.md` com `references/`, `assets/` e `scripts/` — restritas ao
-seu próprio `Role.skills`; o Growth PM, a HX e o Product Owner já trazem
-uma cada (`prioritization`, `evidence-classification`, `user-stories`), e um
+seu próprio `Role.skills`; cada papel já traz uma (`prioritization`,
+`evidence-classification`, `user-stories`, `prototyping`), e um
 projeto pode adicionar as suas. O extra `skills`
 traz o [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 usado em vez do `Skills` embutido do Pydantic AI porque esse só carrega as
@@ -161,7 +195,7 @@ de uma skill com `read_skill_resource` é sempre livre.
 ## Observabilidade
 
 Veja a [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). Um
-ciclo é um arco conversa → `Bet` → `Backlog`. Passe `trace_dir` para o
+ciclo é um arco conversa → `Bet` → `Backlog` → `Prototype`. Passe `trace_dir` para o
 `ProductSquad` para registrar cada chamada como spans (agente, chamadas de
 modelo/ferramenta, tokens, custo real, status) em
 `{trace_dir}/{cycle_id}.jsonl`, um arquivo append-only por ciclo — incluindo

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -24,7 +25,10 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_squads import InteractionMode, Permissions, Role
 from pydantic_squads.product.assembly import (
     ProductSquad,
+    _check_prototype,
     _consult_hx,
+    _DesignRun,
+    _founder_questions_note,
     _list_by_tag,
     _matches,
     _normalize_path,
@@ -36,9 +40,21 @@ from pydantic_squads.product.assembly import (
     _sources_exist,
     _write_note,
 )
-from pydantic_squads.product.contracts import Backlog, Bet, Finding, FindingKind, HXAnswer, Revision, SendBack, Story
+from pydantic_squads.product.contracts import (
+    Backlog,
+    Bet,
+    Finding,
+    FindingKind,
+    FounderQuestion,
+    HXAnswer,
+    Prototype,
+    Revision,
+    Screen,
+    SendBack,
+    Story,
+)
 from pydantic_squads.product.knowledge import MarkdownKnowledgeBase
-from pydantic_squads.product.roles import GROWTH_PM, HX, PRODUCT_OWNER
+from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
 
 pydantic_ai_models.ALLOW_MODEL_REQUESTS = False
 
@@ -573,7 +589,7 @@ def test_growth_pm_and_hx_instructions_include_product_context(tmp_path):
 def test_product_owner_instructions_include_product_context(tmp_path):
     """The Product Owner's instructions include the given product context"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=True)])
     captured = {}
 
     def fn(messages, info):
@@ -610,7 +626,7 @@ def test_close_bet_forces_structured_bet_output(tmp_path):
 def test_submit_bet_returns_backlog(tmp_path):
     """submit_bet() hands the bet to the Product Owner and returns its Backlog"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"])])
+    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"], needs_design=True)])
     squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(backlog)))
     assert squad.submit_bet(_bet()) == backlog
 
@@ -637,7 +653,7 @@ def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path)
     """The founder must call submit_bet(revision.bet) to actually reach the PO"""
     send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
     revised_bet = _bet(scope=["Signup wizard", "web only"])
-    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"])])
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=True)])
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(
         kb,
@@ -876,3 +892,353 @@ def test_usage_limits_is_enforced_within_a_call(tmp_path):
     )
     with pytest.raises(UsageLimitExceeded):
         squad.chat("look into alpha")
+
+
+# -- ProductSquad: design() (ADR 0007) ---------------------------------------
+
+_HTML = "<!doctype html><html><body><section id='a'><h1>A</h1></section></body></html>"
+
+
+def _design_backlog() -> Backlog:
+    return Backlog(
+        stories=[
+            Story(title="See progress", acceptance_criteria=["Shows the current step"], needs_design=True),
+            Story(title="Store drafts", acceptance_criteria=["Draft is saved"], needs_design=False),
+        ]
+    )
+
+
+def _design_dir(messages) -> str:
+    """The squad/design/<cycle_id> directory design() put in the Designer's prompt."""
+    for message in messages:
+        for part in message.parts:
+            match = re.search(r"under '(squad/design/[^']+)/'", str(getattr(part, "content", "")))
+            if match:
+                return match.group(1)
+    raise AssertionError("no design directory in the prompt")
+
+
+def _write_html(html: str = _HTML, name: str = "prototype.html"):
+    """A turn where the Designer writes the prototype HTML into its design directory."""
+
+    def turn(messages, info):
+        path = f"{_design_dir(messages)}/{name}"
+        return ModelResponse(parts=[ToolCallPart("write_note", {"path": path, "content": html})])
+
+    return turn
+
+
+def _return_prototype(stories: list[str] | None = None, questions: list[FounderQuestion] | None = None, name="prototype.html"):
+    """A turn where the Designer returns a Prototype pointing at its HTML file."""
+
+    def turn(messages, info):
+        prototype = Prototype(
+            screens=[Screen(name="Progress", purpose="Show progress", stories=stories or ["See progress"], states=["default"])],
+            html_path=f"{_design_dir(messages)}/{name}",
+            founder_questions=questions or [],
+        )
+        return _call_output_tool(prototype)(messages, info)
+
+    return turn
+
+
+def _question(**overrides) -> FounderQuestion:
+    defaults = dict(question="Which tone?", context="Brand is undefined", origin="positioning", suggested_default="Friendly")
+    return FounderQuestion(**{**defaults, **overrides})
+
+
+def _user_prompts(messages) -> str:
+    return "\n".join(
+        str(part.content) for message in messages for part in message.parts if part.part_kind == "user-prompt"
+    )
+
+
+def test_design_returns_a_prototype_and_writes_its_questions_note(tmp_path):
+    """design() returns the Designer's Prototype and writes questions.md next to its HTML"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(_write_html(), _return_prototype(questions=[_question()])),
+    )
+    prototype = squad.design(_design_backlog())
+    assert isinstance(prototype, Prototype)
+    assert prototype.html_path == f"squad/design/{squad._cycle_id}/prototype.html"
+    assert kb.read(prototype.html_path).content == _HTML
+    questions = kb.read(f"squad/design/{squad._cycle_id}/questions.md")
+    assert questions.frontmatter["cycle_id"] == squad._cycle_id
+    assert "## Which tone?" in questions.content
+
+
+def test_design_returns_none_without_running_the_designer_when_nothing_needs_design(tmp_path):
+    """design() returns None, and never calls the model, when no story needs design"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())
+    backlog = Backlog(stories=[Story(title="Store drafts", acceptance_criteria=["saved"], needs_design=False)])
+    assert squad.design(backlog) is None
+
+
+def test_design_retries_when_a_story_that_needs_design_is_on_no_screen(tmp_path):
+    """The coverage gate sends the Designer a ModelRetry listing the uncovered story"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    retry_prompts = []
+
+    def fixed_prototype(messages, info):
+        retry_prompts.append(str(messages[-1].parts[0].content))
+        return _return_prototype()(messages, info)
+
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(_write_html(), _return_prototype(stories=["Store drafts"]), fixed_prototype),
+    )
+    assert isinstance(squad.design(_design_backlog()), Prototype)
+    assert "story 'See progress' needs design but is in no screen" in retry_prompts[0]
+
+
+def test_design_passes_a_send_back_through_to_the_founder(tmp_path):
+    """A Designer SendBack is returned as is, with no Product Owner run and no questions note"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    send_back = SendBack(reason="'See progress' is ambiguous", questions=["Progress of what?"])
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(send_back)))
+    assert squad.design(_design_backlog()) == send_back
+    assert not (tmp_path / "squad" / "design").exists()
+
+
+def test_design_prompt_asks_for_an_initial_design_system_when_there_is_none(tmp_path):
+    """With an empty design-system/, the Designer is asked to propose an initial one"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    prompts = []
+
+    def capture(messages, info):
+        prompts.append(_user_prompts(messages))
+        return _write_html()(messages, info)
+
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(capture, _return_prototype()))
+    squad.design(_design_backlog())
+    assert "design-system/ is empty" in prompts[0]
+
+
+def test_design_prompt_does_not_ask_for_a_design_system_when_one_exists(tmp_path):
+    """With notes under design-system/, the Designer is not asked to start one"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("design-system/tokens.md", "primary: blue")
+    prompts = []
+
+    def capture(messages, info):
+        prompts.append(_user_prompts(messages))
+        return _write_html()(messages, info)
+
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(capture, _return_prototype()))
+    squad.design(_design_backlog())
+    assert "design-system/ is empty" not in prompts[0]
+    assert "See progress" in prompts[0]
+
+
+def test_design_system_write_defers_for_approval_then_resumes(tmp_path):
+    """A Designer write to design-system/** defers to the founder, then resumes the same run"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("write_note", {"path": "design-system/tokens.md", "content": "primary: blue"}),
+            _write_html(),
+            _return_prototype(),
+        ),
+    )
+    pending = squad.design(_design_backlog())
+    assert isinstance(pending, DeferredToolRequests)
+    assert pending.approvals[0].tool_name == "write_note"
+    assert not (tmp_path / "design-system").exists()
+
+    prototype = squad.design(deferred_tool_results=pending.build_results(approve_all=True))
+    assert isinstance(prototype, Prototype)
+    assert kb.read("design-system/tokens.md").content == "primary: blue"
+
+
+def test_design_answers_round_puts_the_answers_in_the_prompt(tmp_path):
+    """design(backlog, answers=...) sends the previous prototype and the founder's answers to the Designer"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    tone = _question()
+    color = _question(question="Which color?", suggested_default="Blue")
+    prompts = []
+
+    def capture(messages, info):
+        prompts.append(_user_prompts(messages))
+        return _write_html()(messages, info)
+
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(_write_html(), _return_prototype(questions=[tone, color]), capture, _return_prototype()),
+    )
+    squad.design(_design_backlog())
+    revised = squad.design(_design_backlog(), answers={"Which tone?": "Formal"})
+    assert isinstance(revised, Prototype)
+    assert "Which tone?\n  Answer: Formal" in prompts[0]
+    assert "Which color?\n  Unanswered: keep your suggested default (Blue)" in prompts[0]
+    assert "No open questions." in kb.read(f"squad/design/{squad._cycle_id}/questions.md").content
+
+
+def test_design_answers_need_a_previous_prototype(tmp_path):
+    """design(answers=...) before any Prototype is a usage error"""
+    squad = ProductSquad(MarkdownKnowledgeBase(tmp_path), context=TEST_CONTEXT, model=_scripted_model())
+    with pytest.raises(ValueError, match="previous Prototype"):
+        squad.design(_design_backlog(), answers={"Which tone?": "Formal"})
+
+
+def test_design_answers_must_match_the_questions_asked(tmp_path):
+    """design(answers=...) rejects an answer to a question the Designer never asked"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(
+        kb, context=TEST_CONTEXT, model=_scripted_model(_write_html(), _return_prototype(questions=[_question()]))
+    )
+    squad.design(_design_backlog())
+    with pytest.raises(ValueError, match="did not ask"):
+        squad.design(_design_backlog(), answers={"Which font?": "Serif"})
+
+
+def test_design_needs_a_backlog_unless_resuming(tmp_path):
+    """design() without a backlog and without deferred_tool_results is a usage error"""
+    squad = ProductSquad(MarkdownKnowledgeBase(tmp_path), context=TEST_CONTEXT, model=_scripted_model())
+    with pytest.raises(ValueError, match="needs a Backlog"):
+        squad.design()
+
+
+def test_design_resume_needs_a_pending_design_run(tmp_path):
+    """design(deferred_tool_results=...) with no design run awaiting approval is a usage error"""
+    squad = ProductSquad(MarkdownKnowledgeBase(tmp_path), context=TEST_CONTEXT, model=_scripted_model())
+    with pytest.raises(ValueError, match="no design run is waiting"):
+        squad.design(deferred_tool_results=DeferredToolRequests().build_results())
+
+
+def test_designer_registers_exactly_its_declared_note_tools():
+    """The Designer's registered note tools match Role.tools, minus consult_hx"""
+    assert _registered_tool_names(DESIGNER) == sorted(t for t in DESIGNER.tools if t != "consult_hx")
+
+
+def test_designer_instructions_include_product_context(tmp_path):
+    """The Designer's instructions include the given product context"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    captured = {}
+
+    def capture(messages, info):
+        captured["prompt"] = _system_prompt(messages)
+        return _write_html()(messages, info)
+
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(capture, _return_prototype()))
+    squad.design(_design_backlog())
+    assert TEST_CONTEXT in captured["prompt"]
+
+
+def test_design_records_designer_spans_with_hx_nested_under_consult_hx(tmp_path):
+    """With trace_dir set, design() records designer spans, with HX's run nested under its consult_hx"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    kb.write("interviews/a.md", "users check progress often")
+    trace_dir = tmp_path / "traces"
+    answer = HXAnswer(
+        question="Do users check progress?",
+        summary="Often",
+        findings=[Finding(claim="They check often", kind=FindingKind.EVIDENCE, sources=["interviews/a.md"])],
+    )
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        trace_dir=trace_dir,
+        model=_scripted_model(
+            _call_tool("consult_hx", {"question": "Do users check progress?"}),
+            _call_output_tool(answer),
+            _write_html(),
+            _return_prototype(),
+        ),
+    )
+    assert isinstance(squad.design(_design_backlog()), Prototype)
+
+    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    spans = {line["data"]["span_id"]: line["data"] for line in lines if line["kind"] == "Span"}
+    consult = next(s for s in spans.values() if s["agent"] == "designer" and s["operation"] == "tool:consult_hx")
+    hx_spans = [s for s in spans.values() if s["agent"] == "hx"]
+    assert hx_spans
+    assert any(s["parent_span_id"] == consult["span_id"] for s in hx_spans)
+
+
+# -- _check_prototype: the deterministic gate --------------------------------
+
+
+def _prototype(html_path: str, stories: list[str] | None = None) -> Prototype:
+    return Prototype(
+        screens=[Screen(name="Progress", purpose="p", stories=stories or ["See progress"], states=["default"])],
+        html_path=html_path,
+    )
+
+
+def _run() -> _DesignRun:
+    return _DesignRun(backlog=_design_backlog(), design_dir="squad/design/c1")
+
+
+def test_check_prototype_passes_a_covering_self_contained_prototype(tmp_path):
+    """_check_prototype accepts a covering prototype whose HTML exists and has no external URLs"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("squad/design/c1/p.html", _HTML)
+    prototype = _prototype("squad/design/c1/p.html")
+    assert _check_prototype(kb, _run(), prototype) == prototype
+
+
+def test_check_prototype_retries_on_a_coverage_gap(tmp_path):
+    """_check_prototype retries when the coverage gate finds an unknown story"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("squad/design/c1/p.html", _HTML)
+    with pytest.raises(ModelRetry, match="cites unknown story 'Invented'"):
+        _check_prototype(kb, _run(), _prototype("squad/design/c1/p.html", stories=["See progress", "Invented"]))
+
+
+@pytest.mark.parametrize(
+    "html_path",
+    ["squad/design/other/p.html", "squad/design/c1/../../x/p.html", "/abs/p.html", "squad/design/c1/p.md"],
+)
+def test_check_prototype_retries_when_html_path_is_outside_the_design_dir(tmp_path, html_path):
+    """_check_prototype retries unless html_path is an .html file under this cycle's design dir"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    with pytest.raises(ModelRetry, match="must be an .html file under 'squad/design/c1/'"):
+        _check_prototype(kb, _run(), _prototype(html_path))
+
+
+def test_check_prototype_retries_when_the_html_was_never_written(tmp_path):
+    """_check_prototype retries when html_path points to a file that doesn't exist"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    with pytest.raises(ModelRetry, match="does not exist"):
+        _check_prototype(kb, _run(), _prototype("squad/design/c1/p.html"))
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        '<script src="https://cdn.example.com/x.js"></script>',
+        "<link href='//fonts.example.com/f.css' rel=stylesheet>",
+        '<div style="background: url(http://example.com/a.png)"></div>',
+        '<style>@import "https://example.com/s.css";</style>',
+    ],
+)
+def test_check_prototype_retries_on_an_external_url(tmp_path, snippet):
+    """_check_prototype retries when the HTML loads anything from an external URL"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("squad/design/c1/p.html", f"<html><body>{snippet}</body></html>")
+    with pytest.raises(ModelRetry, match="external URL"):
+        _check_prototype(kb, _run(), _prototype("squad/design/c1/p.html"))
+
+
+def test_check_prototype_allows_in_page_links(tmp_path):
+    """_check_prototype accepts hash links between screens"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("squad/design/c1/p.html", '<a href="#settings">Settings</a><a href="https-guide.html">Guide</a>')
+    prototype = _prototype("squad/design/c1/p.html")
+    assert _check_prototype(kb, _run(), prototype) == prototype
+
+
+def test_founder_questions_note_records_the_hx_question_for_a_gap():
+    """questions.md shows the question put to HX for an hx_gap question"""
+    gap = _question(question="Do they use tablets?", origin="hx_gap", hx_question="Which devices do users use?")
+    note = _founder_questions_note(_prototype("squad/design/c1/p.html").model_copy(update={"founder_questions": [gap]}), "c1")
+    assert "- Asked HX: Which devices do users use?" in note
+    assert "- Origin: hx_gap" in note

@@ -6,8 +6,10 @@ this package imports this module, so it works without `pydantic_ai` installed.
 """
 
 import fnmatch
+import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -24,7 +26,17 @@ from pydantic_ai import (
 from pydantic_ai.messages import ModelMessage
 
 from pydantic_squads import Role, Squad
-from pydantic_squads.product.contracts import Backlog, Bet, BetRecord, HXAnswer, Revision, SendBack, Span
+from pydantic_squads.product.contracts import (
+    Backlog,
+    Bet,
+    BetRecord,
+    HXAnswer,
+    Prototype,
+    Revision,
+    SendBack,
+    Span,
+    design_coverage_errors,
+)
 from pydantic_squads.product.knowledge import KnowledgeBase, Note, format_note
 from pydantic_squads.product.observability import (
     CycleRecorder,
@@ -170,20 +182,63 @@ async def _consult_hx(
 
 
 def _register_consult_hx(
-    pm_agent: Agent[KnowledgeBase, Any],
-    pm_role: Role,
+    caller_agent: Agent[KnowledgeBase, Any],
+    caller_role: Role,
     hx_agent: Agent[KnowledgeBase, Any],
     sink_box: list[SpanSink | None],
 ) -> None:
-    if "consult_hx" not in pm_role.tools:
+    if "consult_hx" not in caller_role.tools:
         return
 
-    @pm_agent.tool
+    @caller_agent.tool
     async def consult_hx(ctx: RunContext[KnowledgeBase], question: str) -> HXAnswer:
         """Ask HX a question about users; returns cited findings, each classified as evidence, assumption or gap."""
         return await _consult_hx(
             hx_agent, ctx.deps, ctx.usage, question, tool_call_id=ctx.tool_call_id, sink=sink_box[0]
         )
+
+
+@dataclass(frozen=True)
+class _DesignRun:
+    """What the Designer's output validator checks a `Prototype` against."""
+
+    backlog: Backlog
+    design_dir: str  # squad/design/<cycle_id>, where the prototype must be written
+
+
+# An external reference in an src/href attribute or a CSS url()/@import:
+# the prototype must open from disk, offline (ADR 0007).
+_EXTERNAL_URL_RE = re.compile(
+    r"""(?:\b(?:src|href)\s*=\s*["']?|url\(\s*["']?|@import\s+["']?)\s*(?:https?:)?//""",
+    re.IGNORECASE,
+)
+
+
+def _check_prototype(kb: KnowledgeBase, run: _DesignRun, prototype: Prototype) -> Prototype:
+    """The deterministic gate on a Designer `Prototype` (ADR 0007), as `ModelRetry`s."""
+    errors = design_coverage_errors(run.backlog, prototype)
+    if errors:
+        raise ModelRetry("The prototype does not match the backlog:\n" + "\n".join(f"- {e}" for e in errors))
+    path = _normalize_path(prototype.html_path)
+    if path is None or not path.startswith(f"{run.design_dir}/") or not path.endswith(".html"):
+        raise ModelRetry(f"html_path must be an .html file under '{run.design_dir}/'")
+    try:
+        html = kb.read(path).content
+    except (OSError, ValueError):
+        raise ModelRetry(f"'{path}' does not exist: write the prototype there before returning it") from None
+    if _EXTERNAL_URL_RE.search(html):
+        raise ModelRetry(f"'{path}' references an external URL: inline everything so it opens offline")
+    return prototype
+
+
+def _register_prototype_validator(agent: Agent[KnowledgeBase, Any], design_box: list[_DesignRun | None]) -> None:
+    @agent.output_validator
+    def validate_prototype(ctx: RunContext[KnowledgeBase], output: Any) -> Any:
+        if not isinstance(output, Prototype):
+            return output  # a SendBack or a DeferredToolRequests has nothing to check
+        run = design_box[0]
+        assert run is not None  # ProductSquad._run_designer sets it for every designer run
+        return _check_prototype(ctx.deps, run, output)
 
 
 _CONTEXT_HEADING: dict[Language, str] = {"en": "Product context", "pt-BR": "Contexto do produto"}
@@ -208,7 +263,7 @@ def _skill_kwargs(build_role_skills: Any, all_skills_dirs: list[Path] | None, ro
 
 def _build_agents(
     squad: Squad, model: Any, context: str, language: Language, skills_dirs: list[Path] | None
-) -> tuple[Agent, Agent, Agent, list[SpanSink | None]]:
+) -> tuple[Agent, Agent, Agent, Agent, list[SpanSink | None], list[_DesignRun | None]]:
     # Imported lazily and only when skills are actually requested, so the `ai`
     # extra alone (skills_dirs=None, the default) never needs the `skills`
     # extra installed.
@@ -247,9 +302,23 @@ def _build_agents(
     )
     _register_note_tools(po, squad["product_owner"])
 
+    # Top-level, like the Product Owner, so a design-system write can pause
+    # for the founder's approval (ADR 0004, ADR 0007).
+    designer = Agent(
+        model,
+        deps_type=KnowledgeBase,
+        output_type=[Prototype, SendBack, DeferredToolRequests],
+        system_prompt=_with_context(squad.instructions_for("designer"), context, language),
+        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["designer"]),
+    )
+    _register_note_tools(designer, squad["designer"])
+    design_box: list[_DesignRun | None] = [None]
+    _register_prototype_validator(designer, design_box)
+
     sink_box: list[SpanSink | None] = [None]
     _register_consult_hx(growth_pm, squad["growth_pm"], hx, sink_box)
-    return growth_pm, hx, po, sink_box
+    _register_consult_hx(designer, squad["designer"], hx, sink_box)
+    return growth_pm, hx, po, designer, sink_box, design_box
 
 
 def _resolution_spans(
@@ -278,6 +347,59 @@ def _resolution_spans(
             )
         )
     return spans
+
+
+def _design_prompt(run: _DesignRun, design_system_empty: bool) -> str:
+    parts = [
+        "Design every story in this backlog that has needs_design=true.",
+        f"Backlog:\n{run.backlog.model_dump_json(indent=2)}",
+        f"Write the prototype as one self-contained .html file under '{run.design_dir}/' "
+        "and set html_path to it.",
+    ]
+    if design_system_empty:
+        parts.append(
+            "design-system/ is empty. Propose an initial design system (tokens for color, typography, "
+            "spacing and radius, plus base components) grounded in what HX knows about the users, and "
+            "write it under design-system/: those writes need the founder's approval. Anything that "
+            "depends on positioning, tone, brand or an HX gap becomes a founder question with your "
+            "suggested default."
+        )
+    return "\n\n".join(parts)
+
+
+def _answers_prompt(prototype: Prototype, answers: dict[str, str]) -> str:
+    lines = []
+    for q in prototype.founder_questions:
+        if q.question in answers:
+            lines.append(f"- {q.question}\n  Answer: {answers[q.question]}")
+        else:
+            lines.append(f"- {q.question}\n  Unanswered: keep your suggested default ({q.suggested_default}).")
+    return (
+        "Revise your previous prototype with the founder's answers.\n"
+        f"Previous prototype:\n{prototype.model_dump_json(indent=2)}\n"
+        "Founder's answers:\n" + "\n".join(lines)
+    )
+
+
+def _founder_questions_note(prototype: Prototype, cycle_id: str) -> str:
+    """The `questions.md` note: every open founder question, for the founder to answer."""
+    if not prototype.founder_questions:
+        body = "No open questions."
+    else:
+        sections = []
+        for q in prototype.founder_questions:
+            section = f"## {q.question}\n\n{q.context}\n\n- Origin: {q.origin}\n"
+            if q.hx_question is not None:
+                section += f"- Asked HX: {q.hx_question}\n"
+            section += f"- Suggested default: {q.suggested_default}\n- Answer:"
+            sections.append(section)
+        body = "\n\n".join(sections)
+    frontmatter: dict[str, str | list[str]] = {
+        "cycle_id": cycle_id,
+        "schema_version": "1",
+        "prototype": prototype.html_path,
+    }
+    return format_note(frontmatter, f"# Questions for the founder\n\n{body}\n")
 
 
 def _send_back_prompt(send_back: SendBack) -> str:
@@ -341,6 +463,10 @@ class ProductSquad:
     deterministically (not left to the Growth PM to remember via
     `write_note`), with `cycle_id`, `schema_version` and `bet_version_id` —
     plus `previous_bet_version_id` on a revision — in its frontmatter.
+
+    `design()` hands an approved `Backlog` to the Designer (ADR 0007), which
+    returns a `Prototype`, a `SendBack` for the founder, or a
+    `DeferredToolRequests` when it wants to write to `design-system/**`.
     """
 
     def __init__(
@@ -355,7 +481,7 @@ class ProductSquad:
     ) -> None:
         self.kb = kb
         squad = build_product_squad(language)
-        self._growth_pm, self._hx, self._po, self._sink_box = _build_agents(
+        self._growth_pm, self._hx, self._po, self._designer, self._sink_box, self._design_box = _build_agents(
             squad, model, context, language, skills_dirs
         )
         self._history: list[ModelMessage] = []
@@ -365,6 +491,9 @@ class ProductSquad:
         self._cycle_id: str | None = None
         self._recorder: CycleRecorder | None = None
         self._last_bet_version_id: str | None = None
+        self._pending_design: _DesignRun | None = None
+        self._designer_history: list[ModelMessage] = []
+        self._last_prototype: Prototype | None = None
 
     def chat(
         self, message: str | None = None, *, deferred_tool_results: DeferredToolResults | None = None
@@ -431,6 +560,99 @@ class ProductSquad:
         self._pending_send_back = None
         self._write_bet_record(output)
         return Revision(bet=output, send_back=send_back)
+
+    def design(
+        self,
+        backlog: Backlog | None = None,
+        *,
+        answers: dict[str, str] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+    ) -> Prototype | SendBack | DeferredToolRequests | None:
+        """Hand an approved `Backlog` to the Designer.
+
+        Returns `None` without running the Designer when no story has
+        `needs_design=True`: there is nothing to prototype. Otherwise returns
+        the `Prototype` (its HTML is in `squad/design/<cycle_id>/`, and its
+        founder questions in `questions.md` next to it), or a `SendBack` when
+        a story is too ambiguous to design — returned to the founder, never
+        sent to the Product Owner automatically.
+
+        A write to `design-system/**` returns a `DeferredToolRequests`: pass
+        its resolution back as `deferred_tool_results`, without `backlog`, to
+        resume that same run.
+
+        `answers` maps the previous `Prototype`'s founder questions to the
+        founder's answers, for a revision round: `design(backlog,
+        answers=...)`. An unanswered question keeps the Designer's suggested
+        default.
+        """
+        if deferred_tool_results is not None:
+            if self._pending_design is None:
+                raise ValueError("design() got deferred_tool_results but no design run is waiting for approval")
+            return self._run_designer(None, self._pending_design, deferred_tool_results=deferred_tool_results)
+        if backlog is None:
+            raise ValueError("design() needs a Backlog unless resuming a deferred design run")
+        if answers is not None:
+            if self._last_prototype is None:
+                raise ValueError("design(answers=...) needs a previous Prototype to revise")
+            asked = {q.question for q in self._last_prototype.founder_questions}
+            unknown = sorted(set(answers) - asked)
+            if unknown:
+                raise ValueError(f"answers to questions the Designer did not ask: {unknown}")
+        if not any(story.needs_design for story in backlog.stories):
+            return None
+
+        self._ensure_cycle()
+        run = _DesignRun(backlog=backlog, design_dir=f"squad/design/{self._cycle_id}")
+        prompt = _design_prompt(run, design_system_empty=self._design_system_empty())
+        if answers is not None:
+            assert self._last_prototype is not None  # checked above
+            prompt += "\n\n" + _answers_prompt(self._last_prototype, answers)
+        return self._run_designer(prompt, run)
+
+    def _design_system_empty(self) -> bool:
+        return not any(note.path.startswith("design-system/") for note in self.kb.search("design-system/"))
+
+    def _run_designer(
+        self, prompt: str | None, run: _DesignRun, *, deferred_tool_results: DeferredToolResults | None = None
+    ) -> Prototype | SendBack | DeferredToolRequests:
+        assert self._cycle_id is not None  # design() ensured the cycle before building `run`
+        sink = SpanSink()
+        self._sink_box[0] = sink
+        self._design_box[0] = run
+        started = time.monotonic()
+        try:
+            result = self._designer.run_sync(
+                prompt,
+                deps=self.kb,
+                message_history=self._designer_history if deferred_tool_results is not None else [],
+                deferred_tool_results=deferred_tool_results,
+                usage_limits=self._usage_limits,
+            )
+        finally:
+            self._sink_box[0] = None
+            self._design_box[0] = None
+        duration_ms = (time.monotonic() - started) * 1000
+        self._record_run(
+            "designer",
+            result.new_messages(),
+            sink,
+            duration_ms,
+            type(result.output).__name__,
+            deferred_tool_results=deferred_tool_results,
+        )
+        output = result.output
+        if isinstance(output, DeferredToolRequests):
+            # Kept in memory only: after a restart, call design() again (ADR 0007).
+            self._pending_design = run
+            self._designer_history = result.all_messages()
+            return output
+        self._pending_design = None
+        self._designer_history = []
+        if isinstance(output, Prototype):
+            self._last_prototype = output
+            self.kb.write(f"{run.design_dir}/questions.md", _founder_questions_note(output, self._cycle_id))
+        return output
 
     def resume(self, cycle_id: str) -> None:
         """Reload a past cycle's conversation from `trace_dir` and continue with `chat()`.

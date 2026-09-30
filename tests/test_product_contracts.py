@@ -1,7 +1,21 @@
 import pytest
 from pydantic import ValidationError
 
-from pydantic_squads.product import Backlog, Bet, Finding, FindingKind, HXAnswer, Revision, SendBack, Story
+from pydantic_squads.product import (
+    Backlog,
+    Bet,
+    ComponentProposal,
+    Finding,
+    FindingKind,
+    FounderQuestion,
+    HXAnswer,
+    Prototype,
+    Revision,
+    Screen,
+    SendBack,
+    Story,
+    design_coverage_errors,
+)
 
 
 def test_evidence_requires_source():
@@ -78,7 +92,7 @@ def test_bet_defaults_assumptions_and_evidence_to_empty():
 def test_story_requires_acceptance_criteria():
     """A Story must have at least one acceptance criterion"""
     with pytest.raises(ValidationError):
-        Story(title="Shorter signup wizard", acceptance_criteria=[])
+        Story(title="Shorter signup wizard", acceptance_criteria=[], needs_design=True)
 
 
 def test_backlog_requires_at_least_one_story():
@@ -89,7 +103,7 @@ def test_backlog_requires_at_least_one_story():
 
 def test_backlog_with_stories_is_valid():
     """A Backlog accepts one or more stories"""
-    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["Wizard has 3 steps"])])
+    backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["Wizard has 3 steps"], needs_design=True)])
     assert len(backlog.stories) == 1
 
 
@@ -123,3 +137,98 @@ def test_revision_carries_both_the_new_bet_and_the_send_back():
     revision = Revision(bet=bet, send_back=send_back)
     assert revision.bet == bet
     assert revision.send_back == send_back
+
+
+# -- Designer contracts (ADR 0007) -------------------------------------------
+
+
+def test_story_requires_needs_design():
+    """A Story has no needs_design default: the Product Owner must decide"""
+    with pytest.raises(ValidationError, match="needs_design"):
+        Story(title="Shorter wizard", acceptance_criteria=["3 steps"])
+
+
+def _screen(name: str = "Signup", stories: list[str] | None = None) -> Screen:
+    return Screen(name=name, purpose="Sign up", stories=stories or [], states=["default"])
+
+
+def test_screen_requires_a_state():
+    """A Screen must list at least one state"""
+    with pytest.raises(ValidationError):
+        Screen(name="Signup", purpose="Sign up", states=[])
+
+
+def test_prototype_requires_a_screen():
+    """A Prototype must have at least one screen"""
+    with pytest.raises(ValidationError):
+        Prototype(screens=[], html_path="squad/design/c/prototype.html")
+
+
+def test_prototype_defaults_changes_and_questions_to_empty():
+    """A Prototype's design-system changes and founder questions default to empty"""
+    prototype = Prototype(screens=[_screen()], html_path="squad/design/c/prototype.html")
+    assert prototype.design_system_changes == []
+    assert prototype.founder_questions == []
+
+
+def test_component_proposal_carries_name_reason_and_spec():
+    """A ComponentProposal records what to add, why, and how it works"""
+    proposal = ComponentProposal(name="Stepper", reason="Wizard needs progress", spec="Dots, current one filled")
+    assert proposal.name == "Stepper"
+
+
+def test_hx_gap_question_requires_the_hx_question():
+    """An hx_gap FounderQuestion must reference the question put to HX"""
+    with pytest.raises(ValidationError, match="question put to HX"):
+        FounderQuestion(question="Q?", context="c", origin="hx_gap", suggested_default="d")
+
+
+def test_hx_gap_question_with_hx_question_is_valid():
+    """An hx_gap FounderQuestion that references its HX question is valid"""
+    q = FounderQuestion(question="Q?", context="c", origin="hx_gap", suggested_default="d", hx_question="Do users X?")
+    assert q.hx_question == "Do users X?"
+
+
+def test_positioning_question_rejects_an_hx_question():
+    """A positioning FounderQuestion never references an HX question"""
+    with pytest.raises(ValidationError, match="must not reference"):
+        FounderQuestion(question="Q?", context="c", origin="positioning", suggested_default="d", hx_question="x")
+
+
+def test_positioning_question_without_hx_question_is_valid():
+    """A positioning FounderQuestion without an HX question is valid"""
+    q = FounderQuestion(question="Tone?", context="c", origin="positioning", suggested_default="Friendly")
+    assert q.hx_question is None
+
+
+def _backlog() -> Backlog:
+    return Backlog(
+        stories=[
+            Story(title="See progress", acceptance_criteria=["Shows step"], needs_design=True),
+            Story(title="Store drafts", acceptance_criteria=["Draft saved"], needs_design=False),
+        ]
+    )
+
+
+def test_coverage_gate_passes_when_every_design_story_is_on_a_screen():
+    """The coverage gate passes when every needs_design story is on some screen"""
+    prototype = Prototype(screens=[_screen(stories=["See progress"])], html_path="p.html")
+    assert design_coverage_errors(_backlog(), prototype) == []
+
+
+def test_coverage_gate_ignores_stories_that_need_no_design():
+    """Stories with needs_design=False may be left off every screen"""
+    prototype = Prototype(screens=[_screen(stories=["See progress"])], html_path="p.html")
+    assert not any("Store drafts" in e for e in design_coverage_errors(_backlog(), prototype))
+
+
+def test_coverage_gate_flags_an_uncovered_design_story():
+    """The coverage gate flags a needs_design story that is on no screen"""
+    prototype = Prototype(screens=[_screen()], html_path="p.html")
+    assert design_coverage_errors(_backlog(), prototype) == ["story 'See progress' needs design but is in no screen"]
+
+
+def test_coverage_gate_flags_a_screen_citing_an_unknown_story():
+    """The coverage gate flags a screen that cites a story missing from the backlog"""
+    prototype = Prototype(screens=[_screen(stories=["See progress", "Invented"])], html_path="p.html")
+    assert design_coverage_errors(_backlog(), prototype) == ["screen 'Signup' cites unknown story 'Invented'"]

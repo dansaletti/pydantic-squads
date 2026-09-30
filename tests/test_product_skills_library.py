@@ -29,3 +29,21 @@ def test_user_stories_skill_has_skill_md_and_a_reference_file():
     """The user-stories skill ships a SKILL.md naming itself and at least one references/ file"""
     assert "name: user-stories" in _skill_md("user-stories")
     assert _has_reference_file("user-stories")
+
+
+def test_user_stories_skill_explains_needs_design():
+    """The user-stories skill tells the Product Owner how to set needs_design"""
+    assert "needs_design" in _skill_md("user-stories")
+
+
+def test_prototyping_skill_has_skill_md_and_a_reference_file():
+    """The prototyping skill ships a SKILL.md naming itself and at least one references/ file"""
+    assert "name: prototyping" in _skill_md("prototyping")
+    assert _has_reference_file("prototyping")
+
+
+def test_prototyping_skill_references_every_bundled_file():
+    """The prototyping SKILL.md points to each of its references/ files"""
+    skill_md = _skill_md("prototyping")
+    for reference in (SKILLS_DIR / "prototyping" / "references").glob("*.md"):
+        assert f"references/{reference.name}" in skill_md

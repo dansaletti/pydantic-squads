@@ -42,6 +42,7 @@ class Report:
     slow_spans: list[Any] = field(default_factory=list)
     hx_retries: list[Any] = field(default_factory=list)
     po_send_backs: list[Any] = field(default_factory=list)
+    designer_send_backs: list[Any] = field(default_factory=list)
     pending_approvals: list[Any] = field(default_factory=list)
     cycle_input_tokens: int = 0
     over_budget_cycle: bool = False
@@ -82,6 +83,7 @@ def build_report(
         if s.agent == "hx" and s.status == "retry" and s.detail and _HX_MISSING_SOURCE in s.detail
     ]
     po_send_backs = [s for s in spans if s.agent == "product_owner" and s.output_type == "SendBack"]
+    designer_send_backs = [s for s in spans if s.agent == "designer" and s.output_type == "SendBack"]
     resolved_tool_call_ids = {s.tool_call_id for s in spans if s.operation == "approval_resolution"}
     pending_approvals = [
         s
@@ -106,6 +108,7 @@ def build_report(
         slow_spans=slow_spans,
         hx_retries=hx_retries,
         po_send_backs=po_send_backs,
+        designer_send_backs=designer_send_backs,
         pending_approvals=pending_approvals,
         cycle_input_tokens=cycle_input_tokens,
         over_budget_cycle=over_budget_cycle,
@@ -163,6 +166,7 @@ def print_report(report: Report) -> None:
     for s in report.hx_retries:
         console.print(f"  - {s.detail}")
     console.print(f"Product Owner send-backs: {len(report.po_send_backs)}")
+    console.print(f"Designer send-backs: {len(report.designer_send_backs)}")
     console.print(f"Pending approvals: {len(report.pending_approvals)}")
     for s in report.pending_approvals:
         console.print(f"  - {s.operation} ({s.agent})")

@@ -20,3 +20,7 @@ items below are being built through it, in phases:
 5. **Skills**: per-role Agent Skills (`SKILL.md` plus `references/`,
    `assets/` and `scripts/`), behind the optional `skills` extra —
    `pydantic_squads.product.skills_integration` (see ADR 0005).
+6. **Designer**: a fourth role that turns the stories that need design into
+   a self-contained, mobile-first HTML prototype and grows the product's
+   design system, with a deterministic coverage gate and founder questions
+   — `ProductSquad.design()` (see ADR 0007).
