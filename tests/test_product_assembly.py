@@ -733,11 +733,22 @@ def test_chat_with_trace_dir_writes_a_cycle_jsonl_file(tmp_path):
 
     files = list(trace_dir.glob("*.jsonl"))
     assert len(files) == 1
-    assert files[0].stem == squad._cycle_id
+    assert files[0].stem == squad.cycle_id
     kinds = [json.loads(line)["kind"] for line in files[0].read_text().splitlines()]
     assert kinds[0] == "CycleHeader"
     assert kinds[-1] == "CycleSnapshot"
     assert "Span" in kinds
+
+
+def test_cycle_id_is_none_until_the_first_call(tmp_path):
+    """cycle_id is None on a fresh ProductSquad and set once the first call starts a cycle"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("hi")))
+    assert squad.cycle_id is None
+
+    squad.chat("hey")
+
+    assert squad.cycle_id is not None
 
 
 def test_chat_without_trace_dir_writes_no_trace_file_but_still_has_a_cycle_id(tmp_path):
@@ -747,8 +758,8 @@ def test_chat_without_trace_dir_writes_no_trace_file_but_still_has_a_cycle_id(tm
 
     squad.chat("hey")
 
-    assert squad._cycle_id is not None
-    assert not (tmp_path / f"{squad._cycle_id}.jsonl").exists()
+    assert squad.cycle_id is not None
+    assert not (tmp_path / f"{squad.cycle_id}.jsonl").exists()
 
 
 def test_close_bet_writes_a_bet_note_with_frontmatter(tmp_path):
@@ -762,7 +773,7 @@ def test_close_bet_writes_a_bet_note_with_frontmatter(tmp_path):
     bet_notes = list((tmp_path / "squad" / "bets").glob("*.md"))
     assert len(bet_notes) == 1
     note = kb.read(f"squad/bets/{bet_notes[0].stem}.md")
-    assert note.frontmatter["cycle_id"] == squad._cycle_id
+    assert note.frontmatter["cycle_id"] == squad.cycle_id
     assert note.frontmatter["schema_version"] == "1"
     assert note.frontmatter["bet_version_id"] == bet_notes[0].stem
     assert "previous_bet_version_id" not in note.frontmatter
@@ -802,7 +813,7 @@ def test_resume_continues_a_conversation_from_a_saved_cycle(tmp_path):
     trace_dir = tmp_path / "traces"
     first = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("Hi founder!")), trace_dir=trace_dir)
     first.chat("hey")
-    cycle_id = first._cycle_id
+    cycle_id = first.cycle_id
 
     captured = {}
 
@@ -815,7 +826,7 @@ def test_resume_continues_a_conversation_from_a_saved_cycle(tmp_path):
     reply = second.chat("still there?")
 
     assert reply == "continuing"
-    assert second._cycle_id == cycle_id
+    assert second.cycle_id == cycle_id
     assert captured["history_len"] > 1
 
 
@@ -844,7 +855,7 @@ def test_resumed_approval_is_recorded_as_a_resolution_span(tmp_path):
     reply = squad.chat(deferred_tool_results=pending.build_results(approve_all=True))
     assert reply == "Wrote it after approval."
 
-    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    lines = [json.loads(line) for line in (trace_dir / f"{squad.cycle_id}.jsonl").read_text().splitlines()]
     resolution_spans = [
         line["data"] for line in lines if line["kind"] == "Span" and line["data"]["operation"] == "approval_resolution"
     ]
@@ -871,7 +882,7 @@ def test_resumed_denial_is_recorded_as_a_resolution_span(tmp_path):
     reply = squad.chat(deferred_tool_results=pending.build_results(approvals={tool_call_id: False}))
     assert reply == "Understood, not writing it."
 
-    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    lines = [json.loads(line) for line in (trace_dir / f"{squad.cycle_id}.jsonl").read_text().splitlines()]
     resolution_spans = [
         line["data"] for line in lines if line["kind"] == "Span" and line["data"]["operation"] == "approval_resolution"
     ]
@@ -963,10 +974,10 @@ def test_design_returns_a_prototype_and_writes_its_questions_note(tmp_path):
     )
     prototype = squad.design(_design_backlog())
     assert isinstance(prototype, Prototype)
-    assert prototype.html_path == f"squad/design/{squad._cycle_id}/prototype.html"
+    assert prototype.html_path == f"squad/design/{squad.cycle_id}/prototype.html"
     assert kb.read(prototype.html_path).content == _HTML
-    questions = kb.read(f"squad/design/{squad._cycle_id}/questions.md")
-    assert questions.frontmatter["cycle_id"] == squad._cycle_id
+    questions = kb.read(f"squad/design/{squad.cycle_id}/questions.md")
+    assert questions.frontmatter["cycle_id"] == squad.cycle_id
     assert "## Which tone?" in questions.content
 
 
@@ -1078,7 +1089,7 @@ def test_design_answers_round_puts_the_answers_in_the_prompt(tmp_path):
     assert isinstance(revised, Prototype)
     assert "Which tone?\n  Answer: Formal" in prompts[0]
     assert "Which color?\n  Unanswered: keep your suggested default (Blue)" in prompts[0]
-    assert "No open questions." in kb.read(f"squad/design/{squad._cycle_id}/questions.md").content
+    assert "No open questions." in kb.read(f"squad/design/{squad.cycle_id}/questions.md").content
 
 
 def test_design_answers_need_a_previous_prototype(tmp_path):
@@ -1155,7 +1166,7 @@ def test_design_records_designer_spans_with_hx_nested_under_consult_hx(tmp_path)
     )
     assert isinstance(squad.design(_design_backlog()), Prototype)
 
-    lines = [json.loads(line) for line in (trace_dir / f"{squad._cycle_id}.jsonl").read_text().splitlines()]
+    lines = [json.loads(line) for line in (trace_dir / f"{squad.cycle_id}.jsonl").read_text().splitlines()]
     spans = {line["data"]["span_id"]: line["data"] for line in lines if line["kind"] == "Span"}
     consult = next(s for s in spans.values() if s["agent"] == "designer" and s["operation"] == "tool:consult_hx")
     hx_spans = [s for s in spans.values() if s["agent"] == "hx"]
