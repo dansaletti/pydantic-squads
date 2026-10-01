@@ -654,6 +654,16 @@ class ProductSquad:
             self.kb.write(f"{run.design_dir}/questions.md", _founder_questions_note(output, self._cycle_id))
         return output
 
+    @property
+    def cycle_id(self) -> str | None:
+        """The current cycle's id, or `None` until the first call starts a cycle.
+
+        It names the cycle's trace file (`{trace_dir}/<cycle_id>.jsonl`), is
+        what `resume()` takes, and is in the frontmatter of the cycle's Bet
+        notes (ADR 0006).
+        """
+        return self._cycle_id
+
     def resume(self, cycle_id: str) -> None:
         """Reload a past cycle's conversation from `trace_dir` and continue with `chat()`.
 

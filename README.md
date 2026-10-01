@@ -217,7 +217,8 @@ squad = ProductSquad(
 
 Reload a past conversation and keep going with `chat()`. The `cycle_id` is
 the name of its trace file (`{trace_dir}/<cycle_id>.jsonl`), and it is also
-in the frontmatter of the cycle's Bet notes:
+in the frontmatter of the cycle's Bet notes. Read the current one from
+`squad.cycle_id` (`None` until the first call starts a cycle):
 
 ```python
 squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")

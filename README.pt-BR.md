@@ -219,7 +219,8 @@ squad = ProductSquad(
 
 Retome uma conversa passada e continue com `chat()`. O `cycle_id` é o nome
 do arquivo de trace (`{trace_dir}/<cycle_id>.jsonl`) e também aparece no
-frontmatter das notas de Bet do ciclo:
+frontmatter das notas de Bet do ciclo. O ciclo atual fica em
+`squad.cycle_id` (`None` até a primeira chamada iniciar um ciclo):
 
 ```python
 squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./traces")
