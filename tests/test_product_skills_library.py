@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 import pydantic_squads.product as product_pkg
+from pydantic_squads.product.roles import GROWTH_PM
 
 SKILLS_DIR = Path(product_pkg.__file__).parent / "skills"
 
@@ -47,3 +50,42 @@ def test_prototyping_skill_references_every_bundled_file():
     skill_md = _skill_md("prototyping")
     for reference in (SKILLS_DIR / "prototyping" / "references").glob("*.md"):
         assert f"references/{reference.name}" in skill_md
+
+
+MARKETING_SKILLS = [
+    "ab-testing",
+    "analytics",
+    "churn-prevention",
+    "customer-research",
+    "launch",
+    "marketing-psychology",
+    "onboarding",
+    "paywalls",
+    "pricing",
+    "product-marketing",
+    "referrals",
+    "social",
+]
+
+
+@pytest.mark.parametrize("name", MARKETING_SKILLS)
+def test_marketing_skill_ships_with_the_growth_pm(name):
+    """Each marketingskills skill ships a SKILL.md naming itself and is declared by the Growth PM"""
+    assert f"name: {name}" in _skill_md(name)
+    assert name in GROWTH_PM.skills
+
+
+@pytest.mark.parametrize("name", MARKETING_SKILLS)
+def test_marketing_skill_has_no_upstream_only_paths(name):
+    """Adapted skills don't point to .agents/ files or the upstream tools/ registry"""
+    for path in (SKILLS_DIR / name).rglob("*.md"):
+        text = path.read_text()
+        assert ".agents/" not in text, path
+        assert "tools/integrations" not in text and "tools/REGISTRY" not in text, path
+
+
+def test_third_party_notice_credits_marketingskills():
+    """The notice names the upstream repo and carries its MIT license"""
+    notice = (SKILLS_DIR / "THIRD_PARTY_NOTICE.md").read_text()
+    assert "coreyhaines31/marketingskills" in notice
+    assert "MIT License" in notice

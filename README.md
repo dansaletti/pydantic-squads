@@ -168,7 +168,10 @@ automatically to the Product Owner.
 Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
 packages with `references/`, `assets/` and `scripts/` — scoped to its own
 `Role.skills`; every role ships one (`prioritization`,
-`evidence-classification`, `user-stories`, `prototyping`), and a
+`evidence-classification`, `user-stories`, `prototyping`), the Growth PM
+also ships twelve growth-marketing skills from
+[marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
+see `src/pydantic_squads/product/skills/THIRD_PARTY_NOTICE.md`), and a
 project can add its own. The `skills` extra pulls in
 [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 used instead of Pydantic AI's own built-in `Skills` because that one only

@@ -31,12 +31,29 @@ GROWTH_PM = Role(
         "A bet without a metric is not a bet",
         "Prefer the smallest experiment that answers the question",
         "Disagree with the founder when the evidence points elsewhere",
+        "Marketing skills shape hypotheses and experiments; claims about users still go through HX",
     ],
     mode=InteractionMode.CONVERSATIONAL,
     talks_to=[HUMAN, "hx", "product_owner"],
     tools=["consult_hx", "search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/bets/**"], write_with_approval=["docs/**", "assumptions/**"]),
-    skills=["prioritization"],
+    # Every skill but prioritization comes from coreyhaines31/marketingskills
+    # (MIT); see skills/THIRD_PARTY_NOTICE.md.
+    skills=[
+        "prioritization",
+        "product-marketing",
+        "onboarding",
+        "churn-prevention",
+        "referrals",
+        "launch",
+        "marketing-psychology",
+        "customer-research",
+        "ab-testing",
+        "analytics",
+        "pricing",
+        "paywalls",
+        "social",
+    ],
     delivers="A founder-approved Bet: hypothesis, metric, scope and assumptions.",
 )
 
