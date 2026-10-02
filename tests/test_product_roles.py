@@ -14,8 +14,8 @@ def test_hx_declares_its_skill():
 
 
 def test_product_owner_declares_its_skill():
-    """The Product Owner declares the user-stories skill"""
-    assert PRODUCT_OWNER.skills == ["user-stories"]
+    """The Product Owner declares the user-stories and story-mapping skills"""
+    assert PRODUCT_OWNER.skills == ["user-stories", "story-mapping"]
 
 
 def test_growth_pm_can_write_assumptions_with_approval():
