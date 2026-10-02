@@ -2,9 +2,10 @@ from pydantic_squads import HUMAN, InteractionMode
 from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
 
 
-def test_growth_pm_declares_its_skill():
-    """The Growth PM declares the prioritization skill"""
-    assert GROWTH_PM.skills == ["prioritization"]
+def test_growth_pm_declares_its_skills():
+    """The Growth PM declares prioritization first, then its marketing skills"""
+    assert GROWTH_PM.skills[0] == "prioritization"
+    assert len(GROWTH_PM.skills) == 13
 
 
 def test_hx_declares_its_skill():

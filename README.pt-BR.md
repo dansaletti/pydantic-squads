@@ -169,7 +169,10 @@ você, não automaticamente para o Product Owner.
 Cada papel pode carregar [Agent Skills](https://agentskills.io/home) —
 pacotes `SKILL.md` com `references/`, `assets/` e `scripts/` — restritas ao
 seu próprio `Role.skills`; cada papel já traz uma (`prioritization`,
-`evidence-classification`, `user-stories`, `prototyping`), e um
+`evidence-classification`, `user-stories`, `prototyping`), o Growth PM
+traz também doze skills de growth marketing do
+[marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
+veja `src/pydantic_squads/product/skills/THIRD_PARTY_NOTICE.md`), e um
 projeto pode adicionar as suas. O extra `skills`
 traz o [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
 usado em vez do `Skills` embutido do Pydantic AI porque esse só carrega as
