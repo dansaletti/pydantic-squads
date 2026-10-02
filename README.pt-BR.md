@@ -170,7 +170,8 @@ Cada papel pode carregar [Agent Skills](https://agentskills.io/home) —
 pacotes `SKILL.md` com `references/`, `assets/` e `scripts/` — restritas ao
 seu próprio `Role.skills`; cada papel já traz uma (`prioritization`,
 `evidence-classification`, `user-stories`, `prototyping`), o Product
-Owner traz também `story-mapping`, o Growth PM
+Owner traz também `story-mapping`, o Designer traz `impeccable` (adaptada
+do [impeccable](https://github.com/pbakaus/impeccable), Apache-2.0), o Growth PM
 traz também doze skills de growth marketing do
 [marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
 veja `src/pydantic_squads/product/skills/THIRD_PARTY_NOTICE.md`), e um

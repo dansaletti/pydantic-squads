@@ -39,7 +39,7 @@ def test_user_stories_skill_explains_needs_design():
     assert "needs_design" in _skill_md("user-stories")
 
 
-@pytest.mark.parametrize("name", ["user-stories", "story-mapping"])
+@pytest.mark.parametrize("name", ["user-stories", "story-mapping", "impeccable"])
 def test_product_owner_skill_references_every_bundled_file(name):
     """Each Product Owner SKILL.md points to each of its references/ files"""
     skill_md = _skill_md(name)
@@ -103,3 +103,21 @@ def test_third_party_notice_credits_marketingskills():
     notice = (SKILLS_DIR / "THIRD_PARTY_NOTICE.md").read_text()
     assert "coreyhaines31/marketingskills" in notice
     assert "MIT License" in notice
+
+
+def test_impeccable_skill_has_no_upstream_tooling():
+    """The adapted impeccable skill ships no scripts and never calls the upstream launcher"""
+    skill_dir = SKILLS_DIR / "impeccable"
+    assert not (skill_dir / "scripts").exists()
+    for path in skill_dir.rglob("*.md"):
+        text = path.read_text()
+        assert "scripts/impeccable" not in text, path
+        assert "`/impeccable" not in text, path
+        assert "DESIGN.md" not in text, path
+
+
+def test_third_party_notice_credits_impeccable():
+    """The notice names the impeccable repo, and its Apache license ships with the skill"""
+    notice = (SKILLS_DIR / "THIRD_PARTY_NOTICE.md").read_text()
+    assert "pbakaus/impeccable" in notice
+    assert "Apache License" in (SKILLS_DIR / "impeccable" / "LICENSE").read_text()
