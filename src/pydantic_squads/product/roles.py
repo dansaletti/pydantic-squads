@@ -113,7 +113,7 @@ PRODUCT_OWNER = Role(
     talks_to=["growth_pm"],
     tools=["search_notes", "read_note", "write_note"],
     permissions=Permissions(write=["squad/backlog/**"]),
-    skills=["user-stories"],
+    skills=["user-stories", "story-mapping"],
     delivers="A Backlog with stories and acceptance criteria, or a justified SendBack.",
 )
 

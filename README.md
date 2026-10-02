@@ -168,7 +168,8 @@ automatically to the Product Owner.
 Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
 packages with `references/`, `assets/` and `scripts/` — scoped to its own
 `Role.skills`; every role ships one (`prioritization`,
-`evidence-classification`, `user-stories`, `prototyping`), the Growth PM
+`evidence-classification`, `user-stories`, `prototyping`), the Product
+Owner also ships `story-mapping`, the Growth PM
 also ships twelve growth-marketing skills from
 [marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
 see `src/pydantic_squads/product/skills/THIRD_PARTY_NOTICE.md`), and a

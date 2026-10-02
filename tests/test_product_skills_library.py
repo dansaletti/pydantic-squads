@@ -39,6 +39,20 @@ def test_user_stories_skill_explains_needs_design():
     assert "needs_design" in _skill_md("user-stories")
 
 
+@pytest.mark.parametrize("name", ["user-stories", "story-mapping"])
+def test_product_owner_skill_references_every_bundled_file(name):
+    """Each Product Owner SKILL.md points to each of its references/ files"""
+    skill_md = _skill_md(name)
+    for reference in (SKILLS_DIR / name / "references").glob("*.md"):
+        assert f"references/{reference.name}" in skill_md
+
+
+def test_story_mapping_skill_has_skill_md_and_a_reference_file():
+    """The story-mapping skill ships a SKILL.md naming itself and at least one references/ file"""
+    assert "name: story-mapping" in _skill_md("story-mapping")
+    assert _has_reference_file("story-mapping")
+
+
 def test_prototyping_skill_has_skill_md_and_a_reference_file():
     """The prototyping skill ships a SKILL.md naming itself and at least one references/ file"""
     assert "name: prototyping" in _skill_md("prototyping")
