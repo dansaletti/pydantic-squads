@@ -148,6 +148,6 @@ DESIGNER = Role(
     # Runs at the top level, like the Product Owner, so a design-system write
     # can pause for the founder's approval (ADR 0004, ADR 0007).
     permissions=Permissions(write=["squad/design/**"], write_with_approval=["design-system/**"]),
-    skills=["prototyping"],
+    skills=["prototyping", "impeccable"],
     delivers="A Prototype covering every story that needs design, or a justified SendBack.",
 )
