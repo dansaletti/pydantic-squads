@@ -47,7 +47,7 @@ def test_designer_is_a_task_role_that_never_talks_to_the_human():
 
 def test_designer_declares_its_skill():
     """The Designer loads the prototyping skill"""
-    assert DESIGNER.skills == ["prototyping"]
+    assert DESIGNER.skills == ["prototyping", "impeccable"]
 
 
 def test_designer_can_consult_hx():

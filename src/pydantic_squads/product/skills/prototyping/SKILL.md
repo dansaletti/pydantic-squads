@@ -38,7 +38,8 @@ deciding.
    each screen can be in: default, empty, loading, error, and success where
    it applies. List them in `Screen.states`.
 7. Check accessibility (`references/accessibility.md`) and usability
-   (`references/usability-heuristics.md`) before delivering.
+   (`references/usability-heuristics.md`) before delivering. For the craft
+   of each screen and the final quality pass, load the `impeccable` skill.
 8. Build the prototype as one self-contained HTML file in the output
    directory you are given, following `references/single-file-prototype.md`:
    inline CSS and JS, no external URLs, navigable between screens. Set
