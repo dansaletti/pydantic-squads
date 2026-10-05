@@ -26,6 +26,7 @@ from pydantic_ai import (
 from pydantic_ai.messages import ModelMessage
 
 from pydantic_squads import Role, Squad
+from pydantic_squads.product.claude_code import resolve_model
 from pydantic_squads.product.contracts import (
     Backlog,
     Bet,
@@ -274,6 +275,9 @@ def _build_agents(
 
         all_skills_dirs = [LIBRARY_SKILLS_DIR, *skills_dirs]
 
+    # "claude-code" / "claude-code:<model>" runs on the local Claude Code login (ADR 0008).
+    model = resolve_model(model)
+
     growth_pm = Agent(
         model,
         deps_type=KnowledgeBase,
@@ -463,6 +467,12 @@ class ProductSquad:
     deterministically (not left to the Growth PM to remember via
     `write_note`), with `cycle_id`, `schema_version` and `bet_version_id` —
     plus `previous_bet_version_id` on a revision — in its frontmatter.
+
+    `model` is any Pydantic AI model or model string (e.g.
+    `"anthropic:claude-sonnet-4-5"`, billed to an API key), or
+    `"claude-code"` / `"claude-code:<model>"` to run every agent on the
+    local Claude Code CLI and its logged-in account — for your own local
+    use only (`pydantic_squads.product.claude_code`, ADR 0008).
 
     `design()` hands an approved `Backlog` to the Designer (ADR 0007), which
     returns a `Prototype`, a `SendBack` for the founder, or a

@@ -133,6 +133,39 @@ while isinstance(resultado, Revision):
 # revisão precisou de aprovação de escrita).
 ```
 
+### Rodando no seu login do Claude Code (sem API key)
+
+Se você tem o [Claude Code](https://code.claude.com) instalado e logado
+(`claude`, depois `/login`), a squad pode rodar nesse login em vez de uma API
+key: passe `model="claude-code"` (o modelo padrão do Claude Code) ou
+`model="claude-code:sonnet"` / `"claude-code:opus"`. Cada requisição de agente
+vira uma chamada `claude -p` sem ferramentas; as tools, permissões,
+aprovações e validadores da squad continuam rodando em Python, sem mudança
+(ADR 0008).
+
+```python
+import os
+
+squad = ProductSquad(
+    kb,
+    model=os.environ.get("SQUAD_MODEL", "claude-code:sonnet"),  # ou "anthropic:claude-sonnet-4-5"
+    context="...",
+)
+```
+
+O `ANTHROPIC_API_KEY` é removido do ambiente da CLI para que o login seja
+usado; para mais controle, monte o modelo você mesmo:
+`ClaudeCodeModel("sonnet", timeout=900, extra_args=[...])` de
+`pydantic_squads.product.claude_code`.
+
+> **Só para uso local e pessoal.** A Anthropic não permite que produtos de
+> terceiros ofereçam o login do claude.ai ou os limites dele aos seus
+> usuários. Use este backend para rodar a squad para você; o que for
+> entregue a outras pessoas usa API key. Ele também é mais lento que a API
+> (um processo da CLI por requisição), consome os limites de uso do seu
+> plano e funciona melhor com Sonnet ou Opus: modelos pequenos seguem o
+> protocolo de chamada de ferramentas com menos confiabilidade.
+
 ### Desenhando
 
 O Product Owner marca cada história com `needs_design` (obrigatório, sem
