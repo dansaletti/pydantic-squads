@@ -183,6 +183,41 @@ def test_read_note_symlink_escaping_root_raises_model_retry_not_value_error(tmp_
         _read_note(_role(read=["**"]), kb, "escape.md")
 
 
+def test_read_note_resolves_a_wikilink_to_the_real_path(tmp_path):
+    """read_note accepts an Obsidian [[wikilink]] and returns the note under its real path"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("assumptions/9. Premissas a validar.md", "premissas")
+    note = _read_note(_role(read=["**"]), kb, "[[9. Premissas a validar]]")
+    assert note.path == "assumptions/9. Premissas a validar.md"
+
+
+def test_read_note_checks_permission_on_the_resolved_path(tmp_path):
+    """A bare name that resolves into a folder the role can't read is denied"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("private/secret.md", "s")
+    with pytest.raises(ModelRetry, match="not permitted"):
+        _read_note(_role(read=["public/**"]), kb, "secret")
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "../outside.md"])
+def test_read_note_rejects_absolute_and_escaping_paths(tmp_path, path):
+    """read_note denies an absolute path or one that escapes the vault root"""
+    with pytest.raises(ModelRetry, match="not permitted"):
+        _read_note(_role(read=["**"]), MarkdownKnowledgeBase(tmp_path), path)
+
+
+def test_read_note_missing_suggests_readable_paths(tmp_path):
+    """A missing note's retry message suggests similar notes the role can read, never others"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("public/premissas a validar.md", "a")
+    kb.write("private/premissas secretas.md", "b")
+    with pytest.raises(ModelRetry) as info:
+        _read_note(_role(read=["public/**"]), kb, "premissas.md")
+    message = str(info.value)
+    assert "public/premissas a validar.md" in message
+    assert "private/" not in message
+
+
 def test_write_note_free_write(tmp_path):
     """write_note writes directly to a path covered by the write permission"""
     kb = MarkdownKnowledgeBase(tmp_path)

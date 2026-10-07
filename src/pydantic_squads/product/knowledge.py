@@ -5,7 +5,7 @@ this protocol, they do not assume a markdown backend.
 """
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -56,34 +56,71 @@ class MarkdownKnowledgeBase:
         return candidate
 
     def read(self, path: str) -> Note:
+        """Read a note by its path, or by an Obsidian-style reference.
+
+        `docs/x.md`, `docs/x` and, when exactly one note in the vault is
+        named `x`, `x` or `[[x|alias]]` all read `docs/x.md`. The returned
+        note carries the real path, so callers check permissions on it.
+        """
+        path = self._locate(path)
         text = self._resolve(path).read_text(encoding="utf-8")
         frontmatter, body = _parse_note(text)
         return Note(path=path, frontmatter=frontmatter, content=body)
+
+    def _locate(self, path: str) -> str:
+        ref = path.strip()
+        if ref.startswith("[[") and ref.endswith("]]"):
+            ref = ref[2:-2].split("|", 1)[0].split("#", 1)[0].strip()
+        candidates = [ref] if ref.endswith(".md") else [ref, f"{ref}.md"]
+        for candidate in candidates:
+            if self._resolve(candidate).exists():
+                return candidate
+        name = ref.removesuffix(".md")
+        named = [p for p in self._note_paths() if PurePosixPath(p).name.removesuffix(".md") == name]
+        return named[0] if len(named) == 1 else ref  # missing or ambiguous: let the read fail
 
     def list_by_tag(self, tag: str) -> list[Note]:
         return [note for note in self._all_notes() if tag in note.tags]
 
     def search(self, query: str) -> list[Note]:
-        needle = query.lower()
-        return [
-            note
-            for note in self._all_notes()
-            if needle in note.content.lower() or needle in note.path.lower()
-        ]
+        """Notes matching any word of `query` in their path or content, best first.
+
+        A note containing the whole query ranks above any partial match; then
+        notes rank by how many words they contain, ties broken by path. Words
+        of two letters or less (`de`, `a`, `of`) are ignored.
+        """
+        needle = query.lower().strip()
+        terms = {term for term in re.findall(r"\w+", needle) if len(term) > 2}
+        scored: list[tuple[int, Note]] = []
+        for note in self._all_notes():
+            haystack = f"{note.path}\n{note.content}".lower()
+            score = sum(term in haystack for term in terms)
+            if needle and needle in haystack:
+                score += len(terms) + 1
+            if score:
+                scored.append((score, note))
+        scored.sort(key=lambda item: (-item[0], item[1].path))
+        return [note for _, note in scored]
 
     def write(self, path: str, content: str) -> None:
         full = self._resolve(path)
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
 
-    def _all_notes(self) -> list[Note]:
-        notes = []
+    def _note_paths(self) -> list[str]:
+        paths = []
         for p in sorted(self.root.rglob("*.md")):
             rel = p.relative_to(self.root)
             if any(part.startswith(".") for part in rel.parts):
                 continue  # skip dotfiles/dotfolders like .trash, .obsidian
+            paths.append(rel.as_posix())
+        return paths
+
+    def _all_notes(self) -> list[Note]:
+        notes = []
+        for rel in self._note_paths():
             try:
-                notes.append(self.read(str(rel)))
+                notes.append(self.read(rel))
             except (OSError, ValueError):
                 continue  # skip notes that can't be read: a directory, a
                 # broken symlink, or one whose target escapes the vault root
