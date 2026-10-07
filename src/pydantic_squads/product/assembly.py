@@ -92,12 +92,20 @@ def _list_by_tag(role: Role, kb: KnowledgeBase, tag: str) -> list[Note]:
 
 def _read_note(role: Role, kb: KnowledgeBase, path: str) -> Note:
     normalized = _normalize_path(path)
-    if normalized is None or not _matches(normalized, role.permissions.read):
+    if normalized is None:
         raise ModelRetry(f"not permitted to read '{path}'")
     try:
-        return kb.read(normalized)
+        note = kb.read(normalized)
     except (OSError, ValueError):
-        raise ModelRetry(f"note '{normalized}' does not exist or cannot be read") from None
+        # The knowledge base may resolve a bare name or [[wikilink]] to a real path,
+        # so suggest real paths the role can read instead of letting the model guess again.
+        similar = [n.path for n in _search_notes(role, kb, PurePosixPath(normalized).name)][:5]
+        hint = f" Did you mean: {', '.join(similar)}?" if similar else " Use search_notes to find its path."
+        raise ModelRetry(f"note '{normalized}' does not exist or cannot be read.{hint}") from None
+    # Checked on the resolved path: a bare name may resolve into a folder the role can't read.
+    if not _path_allowed(note.path, role.permissions.read):
+        raise ModelRetry(f"not permitted to read '{path}'")
+    return note
 
 
 def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, approved: bool) -> str:
@@ -115,33 +123,37 @@ def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, appro
     raise ModelRetry(f"not permitted to write to '{normalized}'")
 
 
+_NOTE_TOOL_RETRIES = 3  # a wrong path guess shouldn't end the whole turn
+
+
 def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
     """Register only the note tools listed in `role.tools`, scoped to `role.permissions`."""
 
     if "search_notes" in role.tools:
 
-        @agent.tool
+        @agent.tool(retries=_NOTE_TOOL_RETRIES)
         def search_notes(ctx: RunContext[KnowledgeBase], query: str) -> list[Note]:
-            """Search the knowledge base for notes matching `query`."""
+            """Search the knowledge base by keywords; notes matching more of them come first."""
             return _search_notes(role, ctx.deps, query)
 
     if "list_by_tag" in role.tools:
 
-        @agent.tool
+        @agent.tool(retries=_NOTE_TOOL_RETRIES)
         def list_by_tag(ctx: RunContext[KnowledgeBase], tag: str) -> list[Note]:
             """List notes carrying `tag`."""
             return _list_by_tag(role, ctx.deps, tag)
 
     if "read_note" in role.tools:
 
-        @agent.tool
+        @agent.tool(retries=_NOTE_TOOL_RETRIES)
         def read_note(ctx: RunContext[KnowledgeBase], path: str) -> Note:
-            """Read a single note by its path."""
+            """Read a single note by its vault-relative path, including folder and `.md`
+            (e.g. `docs/x.md`), as returned by search_notes. Obsidian `[[wikilinks]]` also work."""
             return _read_note(role, ctx.deps, path)
 
     if "write_note" in role.tools:
 
-        @agent.tool
+        @agent.tool(retries=_NOTE_TOOL_RETRIES)
         def write_note(ctx: RunContext[KnowledgeBase], path: str, content: str) -> str:
             """Write a note by its path. Some paths require human approval first."""
             return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)

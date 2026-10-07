@@ -363,6 +363,7 @@ class ClaudeCodeModel(Model):
             raise ClaudeCodeError(f"claude exited with {result.returncode}: {result.stderr.strip()[:500]}")
         return parse_result(result.stdout)
 
+
 def resolve_model(model: Any) -> Any:
     """Turn `"claude-code"` / `"claude-code:<model>"` into a `ClaudeCodeModel`; pass anything else through."""
     if isinstance(model, str) and (model == MODEL_PREFIX or model.startswith(f"{MODEL_PREFIX}:")):

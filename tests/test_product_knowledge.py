@@ -189,3 +189,45 @@ def test_no_delete_method():
 def test_satisfies_knowledge_base_protocol(tmp_path):
     """MarkdownKnowledgeBase structurally satisfies the KnowledgeBase protocol"""
     assert isinstance(MarkdownKnowledgeBase(tmp_path), KnowledgeBase)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["9. Premissas a validar", "[[9. Premissas a validar]]", "[[9. Premissas a validar|Premissas]]", "assumptions/9. Premissas a validar"],
+)
+def test_read_resolves_obsidian_style_references(tmp_path, ref):
+    """read resolves a bare note name, a [[wikilink]] or a path without .md to the real note"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("assumptions/9. Premissas a validar.md", "premissas")
+    note = kb.read(ref)
+    assert note.path == "assumptions/9. Premissas a validar.md"
+    assert note.content == "premissas"
+
+
+def test_read_does_not_guess_between_notes_with_the_same_name(tmp_path):
+    """read fails on a bare name shared by two notes instead of picking one"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("docs/x.md", "a")
+    kb.write("assumptions/x.md", "b")
+    with pytest.raises(FileNotFoundError):
+        kb.read("x")
+
+
+def test_search_matches_any_word_and_ranks_by_how_many_match(tmp_path):
+    """search with several words returns notes matching some of them, the best matches first"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("a.md", "growth via lista de espera")
+    kb.write("b.md", "canais de aquisição e growth")
+    kb.write("c.md", "nada a ver")
+    results = kb.search("growth aquisição canais")
+    assert [n.path for n in results] == ["b.md", "a.md"]
+
+
+def test_search_ranks_the_whole_phrase_first(tmp_path):
+    """A note containing the whole query ranks above one that only has its words apart"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("a.md", "manager of dispatch, dispatch manager's friend")
+    kb.write("b.md", "dispatch then manager")
+    kb.write("c.md", "the dispatch manager")
+    results = kb.search("dispatch manager")
+    assert [n.path for n in results] == ["a.md", "c.md", "b.md"]
