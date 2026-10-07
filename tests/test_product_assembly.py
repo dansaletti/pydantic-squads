@@ -442,6 +442,22 @@ def test_sources_exist_retries_when_source_escapes_root(tmp_path):
         _sources_exist(kb, answer)
 
 
+@pytest.mark.parametrize(
+    "cited",
+    ["notes/a.md (§1 and §6)", "notes/a.md (seções 1 e 6)", "notes/a.md#Goals", "notes/a.md §2", "notes/a.md, section 2"],
+)
+def test_sources_exist_strips_a_cited_section(tmp_path, cited):
+    """The HX output validator accepts a source cited with a section and rewrites it to the note path"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/a.md", "evidence")
+    answer = HXAnswer(
+        question="q",
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=[cited])],
+    )
+    assert _sources_exist(kb, answer).findings[0].sources == ["notes/a.md"]
+
+
 # -- consult_hx delegation ------------------------------------------------
 
 
@@ -582,6 +598,33 @@ def test_consult_hx_delegates_to_hx_agent(tmp_path):
         ),
     )
     assert squad.chat("Why are users churning?") == "HX says step 3 confuses users."
+
+
+def test_consult_hx_survives_a_text_answer_and_a_bad_source(tmp_path):
+    """HX answering in text, citing a missing note twice, then citing with a section does not end the chat"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("docs/prd.md", "long document")
+
+    def answer(source: str) -> HXAnswer:
+        return HXAnswer(
+            question="q",
+            summary="s",
+            findings=[Finding(claim="c", kind=FindingKind.ASSUMPTION, sources=[source])],
+        )
+
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("consult_hx", {"question": "q"}),
+            _text("The PRD says c."),
+            _call_output_tool(answer("docs/missing.md")),
+            _call_output_tool(answer("docs/other.md")),
+            _call_output_tool(answer("docs/prd.md (§1 e §6)")),
+            _text("Done."),
+        ),
+    )
+    assert squad.chat("What do we know?") == "Done."
 
 
 # -- ProductSquad: context is included in every agent's instructions ------

@@ -322,3 +322,78 @@ def test_product_squad_accepts_the_claude_code_model_string(tmp_path):
     for agent in (squad._growth_pm, squad._hx, squad._po, squad._designer):
         assert isinstance(agent.model, ClaudeCodeModel)
         assert agent.model.model_name == "sonnet"
+
+
+def test_unavailable_function_claim_is_corrected_for_a_text_agent():
+    """A text answer saying an offered function is unavailable is asked again with a correction."""
+    runner = FakeRunner(
+        _stdout({"text": "The search failed with \"No such tool available\".", "tool_calls": []}),
+        _stdout({"text": "", "tool_calls": [{"name": "lookup_population", "arguments": {"city": "SP"}}]}),
+        _stdout({"text": "12.4 milhões", "tool_calls": []}),
+    )
+    agent = Agent(ClaudeCodeModel(runner=runner))
+
+    @agent.tool_plain
+    def lookup_population(city: str) -> float:
+        """Return a city's population in millions."""
+        return 12.4
+
+    assert agent.run_sync("Population of SP?").output == "12.4 milhões"
+    assert "said functions are unavailable" in runner.calls[1]["stdin"]
+    assert "No such tool available" in runner.calls[0]["system"]
+
+
+def test_text_answer_mentioning_a_function_without_a_claim_is_kept():
+    """A text answer that names a function but doesn't call it unavailable is returned as is."""
+    runner = FakeRunner(_stdout({"text": "I used lookup_population: 12.4 million.", "tool_calls": []}))
+    agent = Agent(ClaudeCodeModel(runner=runner))
+
+    @agent.tool_plain
+    def lookup_population(city: str) -> float:
+        """Return a city's population in millions."""
+        return 12.4
+
+    assert agent.run_sync("Population of SP?").output == "I used lookup_population: 12.4 million."
+    assert len(runner.calls) == 1
+
+
+def test_persistent_unavailable_claim_raises_instead_of_passing_as_a_reply():
+    """A text answer that still calls a function unavailable after the correction raises ClaudeCodeError."""
+    claim = _stdout({"text": "lookup_population returned: No such tool available.", "tool_calls": []})
+    runner = FakeRunner(claim, claim)
+    agent = Agent(ClaudeCodeModel(runner=runner))
+
+    @agent.tool_plain
+    def lookup_population(city: str) -> float:
+        """Return a city's population in millions."""
+        return 12.4
+
+    with pytest.raises(ClaudeCodeError, match="unavailable instead of calling it"):
+        agent.run_sync("Population of SP?")
+    assert len(runner.calls) == 2
+
+
+def test_unavailable_wording_counts_only_next_to_a_function_name():
+    """Without the CLI's own error, "unavailable" triggers the correction only when a function is named."""
+    runner = FakeRunner(
+        _stdout({"text": "Population data is unavailable for that year.", "tool_calls": []}),
+        _stdout({"text": "A ferramenta lookup_population está indisponível.", "tool_calls": []}),
+        _stdout({"text": "12.4", "tool_calls": []}),
+    )
+    agent = Agent(ClaudeCodeModel(runner=runner))
+
+    @agent.tool_plain
+    def lookup_population(city: str) -> float:
+        """Return a city's population in millions."""
+        return 12.4
+
+    assert agent.run_sync("Population of SP in 1500?").output == "Population data is unavailable for that year."
+    assert agent.run_sync("Population of SP?").output == "12.4"
+    assert len(runner.calls) == 3
+
+
+def test_no_such_tool_in_a_reply_is_kept_when_no_function_is_offered():
+    """An agent without functions can talk about a missing tool without being corrected."""
+    runner = FakeRunner(_stdout({"text": "The error says: No such tool available.", "tool_calls": []}))
+    assert Agent(ClaudeCodeModel(runner=runner)).run_sync("What does it say?").output.startswith("The error")
+    assert len(runner.calls) == 1

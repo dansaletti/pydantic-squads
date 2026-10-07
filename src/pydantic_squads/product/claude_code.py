@@ -112,6 +112,12 @@ def _tool_line(tool: ToolDefinition) -> str:
     return f"### {tool.name}\n{description}\nArguments JSON schema: {schema}"
 
 
+_NATIVE_CALL_HINT = (
+    '- If invoking a function fails with "No such tool available", you invoked it as a tool of this '
+    "session. Nothing is broken: put that same call in `tool_calls` of your JSON answer instead."
+)
+
+
 def _protocol(params: ModelRequestParameters) -> str:
     lines = [
         "# Response protocol",
@@ -122,6 +128,7 @@ def _protocol(params: ModelRequestParameters) -> str:
         "you can invoke directly, and that is expected. To run them, list them in `tool_calls`; the "
         "agent runs them and the next turn shows their results as `[tool result ...]`. Never say a "
         "function is unavailable and never make up its result.",
+        _NATIVE_CALL_HINT,
         "- To run functions, list the calls in `tool_calls` (several at once if they are independent) "
         "and wait for their results. `arguments` must match the function's JSON schema.",
     ]
@@ -190,6 +197,31 @@ _NO_CALL_CORRECTION = (
     "[retry]\nYour last answer had no `tool_calls`, but a text-only answer is not accepted here. "
     "List the function calls you need in `tool_calls`, or call an output function to finish."
 )
+
+_UNAVAILABLE_CORRECTION = (
+    "[retry]\nYour last answer said functions are unavailable. They are available: \"No such tool "
+    'available" only means you invoked them as tools of this session. Put the same calls in '
+    "`tool_calls` of your JSON answer; the agent runs them. Do not answer without their results."
+)
+
+# What Claude Code answers when the model invokes a listed function as a native tool.
+_NO_SUCH_TOOL_RE = re.compile(r"no such tool", re.IGNORECASE)
+_UNAVAILABLE_RE = re.compile(
+    r"unavailable|not available|indispon[ií]ve(?:l|is)|n[ãa]o est[áa]o? dispon[ií]ve", re.IGNORECASE
+)
+
+
+def _claims_tool_unavailable(text: str, params: ModelRequestParameters) -> bool:
+    """Whether a text-only answer says the offered functions can't be used (the model tried a native tool).
+
+    The CLI's own error is enough; a looser wording only counts next to a function's name.
+    """
+    if not params.function_tools:
+        return False
+    if _NO_SUCH_TOOL_RE.search(text):
+        return True
+    return bool(_UNAVAILABLE_RE.search(text)) and any(tool.name in text for tool in params.function_tools)
+
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
@@ -263,9 +295,12 @@ class ClaudeCodeModel(Model):
     `CLAUDE.md`, hooks or `.mcp.json` leak into the squad's context.
 
     When an agent only accepts a tool call (a structured output such as a
-    `Bet`) and the answer has none, the request is repeated up to
-    `protocol_retries` times with a correction, before Pydantic AI's own
-    output retries are spent on it.
+    `Bet`) and the answer has none, or when a text answer claims one of the
+    offered functions is unavailable (the model reached for a native Claude
+    Code tool), the request is repeated up to `protocol_retries` times with
+    a correction, before Pydantic AI's own output retries are spent on it.
+    A text answer that still claims so after that raises `ClaudeCodeError`
+    instead of passing as a reply.
     """
 
     def __init__(
@@ -342,10 +377,24 @@ class ClaudeCodeModel(Model):
         for attempt in range(self.protocol_retries + 1):
             parts, usage = await self._call(system_prompt, transcript)
             total.incr(usage)
-            has_call = any(isinstance(part, ToolCallPart) for part in parts)
-            if has_call or params.allow_text_output or attempt == self.protocol_retries:
+            if any(isinstance(part, ToolCallPart) for part in parts):
                 break
-            transcript += "\n\n" + _NO_CALL_CORRECTION
+            text = "\n".join(part.content for part in parts if isinstance(part, TextPart))
+            unavailable = params.allow_text_output and _claims_tool_unavailable(text, params)
+            if attempt == self.protocol_retries:
+                if unavailable:
+                    # Never hand this back as a reply: it reads fine but ignored every function.
+                    raise ClaudeCodeError(
+                        "the model answered that a function is unavailable instead of calling it "
+                        f"through `tool_calls`: {text[:300]!r}"
+                    )
+                break
+            if not params.allow_text_output:
+                transcript += "\n\n" + _NO_CALL_CORRECTION
+            elif unavailable:
+                transcript += "\n\n" + _UNAVAILABLE_CORRECTION
+            else:
+                break
         return ModelResponse(parts=parts, usage=total, model_name=self.model_name, provider_name=MODEL_PREFIX)
 
     async def _call(self, system_prompt: str, transcript: str) -> tuple[list[ModelResponsePart], RequestUsage]:
