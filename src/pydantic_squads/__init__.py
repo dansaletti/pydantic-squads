@@ -9,6 +9,11 @@ from pydantic_squads.policies import (
 from pydantic_squads.prompt import EN, PT_BR, PromptTemplate
 from pydantic_squads.role import HUMAN, InteractionMode, Permissions, Role
 from pydantic_squads.squad import Squad
+from pydantic_squads.visualization.gantt_terminal import (
+    SpanCollector,
+    TerminalGantt,
+    track_span,
+)
 
 __all__ = [
     "DEFAULT_POLICIES",
@@ -21,6 +26,9 @@ __all__ = [
     "PromptTemplate",
     "Role",
     "Squad",
+    "SpanCollector",
+    "TerminalGantt",
     "only_conversational_talks_to_human",
     "single_conversational_role",
+    "track_span",
 ]
