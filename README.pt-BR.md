@@ -166,6 +166,11 @@ usado; para mais controle, monte o modelo você mesmo:
 > plano e funciona melhor com Sonnet ou Opus: modelos pequenos seguem o
 > protocolo de chamada de ferramentas com menos confiabilidade.
 
+Os traces deste backend mostram os tokens e o custo que o Claude Code
+informa em cada chamada. Os tokens de entrada são o prompt inteiro,
+incluindo os que vieram do cache, e o custo é uma estimativa a preço de
+tabela da API: serve para comparar ciclos, não é cobrado da sua assinatura.
+
 ### Desenhando
 
 O Product Owner marca cada história com `needs_design` (obrigatório, sem

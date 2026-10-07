@@ -26,6 +26,7 @@ import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -251,12 +252,20 @@ def parse_result(stdout: str) -> tuple[list[ModelResponsePart], RequestUsage]:
         raise ClaudeCodeError(f"claude reported an error: {result.get('result') or result.get('subtype')}")
 
     usage_data = result.get("usage") or {}
+    cache_read = int(usage_data.get("cache_read_input_tokens") or 0)
+    cache_write = int(usage_data.get("cache_creation_input_tokens") or 0)
     usage = RequestUsage(
-        input_tokens=int(usage_data.get("input_tokens") or 0),
+        # The CLI counts cached input apart (nearly all of the prompt, leaving `input_tokens` at a
+        # handful); Pydantic AI's `input_tokens` is the whole prompt, cached or not.
+        input_tokens=int(usage_data.get("input_tokens") or 0) + cache_read + cache_write,
         output_tokens=int(usage_data.get("output_tokens") or 0),
-        cache_read_tokens=int(usage_data.get("cache_read_input_tokens") or 0),
-        cache_write_tokens=int(usage_data.get("cache_creation_input_tokens") or 0),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
     )
+    cost = result.get("total_cost_usd")
+    if isinstance(cost, (int, float)):
+        # At API list prices: what the call would cost on a key, not a charge on a subscription.
+        usage.cost = Decimal(str(cost))
 
     envelope = _envelope(result)
     if envelope is None:
@@ -301,6 +310,11 @@ class ClaudeCodeModel(Model):
     a correction, before Pydantic AI's own output retries are spent on it.
     A text answer that still claims so after that raises `ClaudeCodeError`
     instead of passing as a reply.
+
+    Usage is what the CLI reports for the call, corrections included:
+    `input_tokens` is the whole prompt (cached tokens too) and `cost` is
+    Claude Code's own `total_cost_usd`, an estimate at API list prices
+    that a subscription is not actually charged.
     """
 
     def __init__(

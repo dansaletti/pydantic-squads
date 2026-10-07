@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -56,6 +57,7 @@ def _stdout(envelope: dict | None = None, **extra) -> str:
             "cache_read_input_tokens": 3,
             "cache_creation_input_tokens": 2,
         },
+        "total_cost_usd": 0.0125,
     }
     result.update(extra)
     return json.dumps(result)
@@ -106,7 +108,8 @@ def test_agent_runs_tools_and_structured_output_through_the_cli():
     assert "### lookup_population" in runner.calls[0]["system"]
     assert "## Output functions" in runner.calls[0]["system"]
     assert "text-only answer is not accepted" in runner.calls[0]["system"]
-    assert result.usage.input_tokens == 20
+    assert result.usage.input_tokens == 30
+    assert result.usage.cost == Decimal("0.025")
 
 
 def test_text_output_agent_gets_plain_reply():
@@ -128,7 +131,8 @@ def test_missing_call_is_corrected_before_pydantic_ai_retries():
     assert result.output.population_millions == 12.0
     assert len(runner.calls) == 2
     assert "Your last answer had no `tool_calls`" in runner.calls[1]["stdin"]
-    assert result.usage.input_tokens == 20  # both CLI calls are counted
+    assert result.usage.input_tokens == 30  # both CLI calls are counted
+    assert result.usage.cost == Decimal("0.025")
 
 
 def test_protocol_retries_zero_returns_the_text_as_is():
@@ -214,7 +218,7 @@ def test_run_process_times_out():
 
 
 def test_parse_result_reads_usage_and_tool_calls():
-    """Usage maps to Pydantic AI fields; malformed calls are skipped and bad args become `{}`."""
+    """Input tokens include cached ones and cost is the CLI's; malformed calls are skipped, bad args become `{}`."""
     parts, usage = parse_result(
         _stdout(
             {
@@ -230,7 +234,8 @@ def test_parse_result_reads_usage_and_tool_calls():
     )
     assert isinstance(parts[0], TextPart) and parts[0].content == "thinking aloud"
     assert [(p.tool_name, p.args) for p in parts[1:]] == [("a", {"x": 1}), ("b", {})]
-    assert (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens) == (10, 5, 3, 2)
+    assert (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens) == (15, 5, 3, 2)
+    assert usage.cost == Decimal("0.0125")
 
 
 def test_parse_result_falls_back_to_the_result_text():
@@ -241,6 +246,7 @@ def test_parse_result_falls_back_to_the_result_text():
     parts, usage = parse_result(json.dumps({"subtype": "success", "result": "plain words"}))
     assert parts == [TextPart(content="plain words")]
     assert usage.input_tokens == 0
+    assert usage.cost is None
     parts, _ = parse_result(json.dumps({"subtype": "success", "result": "[1, 2]"}))
     assert parts == [TextPart(content="[1, 2]")]
 
