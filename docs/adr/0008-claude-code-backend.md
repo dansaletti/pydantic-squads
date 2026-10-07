@@ -73,6 +73,11 @@ their own login, locally; it cannot make that login part of a product.
   Claude Code adds its own context to each call.
 - Subject to the subscription's usage limits, which a long squad session
   can hit.
+- Usage comes from the CLI's own result: `input_tokens` is the whole
+  prompt, cached tokens included (the CLI reports those apart, which
+  leaves its bare `input_tokens` at a handful), and cost is its
+  `total_cost_usd`. That cost is an estimate at API list prices, a way
+  to compare cycles, not something a subscription is charged.
 - Tool calling is prompted, not native: strong models (Sonnet, Opus)
   follow the protocol reliably, small ones (Haiku) sometimes don't.
 - No streaming and no images in user prompts (they are replaced by a

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -73,6 +74,23 @@ def test_extract_spans_computes_real_cost_for_a_recognized_model():
     spans = extract_spans(messages, agent="growth_pm")
     assert spans[0].cost_usd is not None
     assert spans[0].cost_usd > 0
+    assert spans[0].detail is None
+
+
+def test_extract_spans_uses_the_cost_the_backend_reported():
+    """extract_spans takes a cost already on the usage (Claude Code) over a genai-prices lookup"""
+    messages = [
+        ModelResponse(
+            parts=[TextPart("hello")],
+            usage=RequestUsage(input_tokens=1165, output_tokens=79, cost=Decimal("0.0109")),
+            model_name="default",
+            provider_name="claude-code",
+            timestamp=_ts(1),
+        ),
+    ]
+    spans = extract_spans(messages, agent="growth_pm")
+    assert spans[0].input_tokens == 1165
+    assert spans[0].cost_usd == 0.0109
     assert spans[0].detail is None
 
 

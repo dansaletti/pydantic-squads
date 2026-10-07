@@ -52,6 +52,9 @@ def _new_span_id() -> str:
 
 
 def _cost_usd(response: ModelResponse) -> tuple[float | None, str | None]:
+    if response.usage.cost is not None:
+        # The backend priced the call itself (e.g. Claude Code, which genai-prices doesn't know).
+        return float(response.usage.cost), None
     try:
         return response.cost().total_price, None
     except Exception as exc:

@@ -164,6 +164,11 @@ used; for more control build the model yourself:
 > works best with Sonnet or Opus: small models follow the tool-calling
 > protocol less reliably.
 
+Traces of this backend show the tokens and cost Claude Code reports for
+each call. Input tokens are the whole prompt, cached tokens included, and
+the cost is an estimate at API list prices: a way to compare cycles, not
+something your subscription is charged.
+
 ### Designing it
 
 The Product Owner marks each story `needs_design` (required, no default).

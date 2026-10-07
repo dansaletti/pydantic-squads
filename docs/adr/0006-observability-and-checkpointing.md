@@ -89,4 +89,6 @@ conversation content anywhere by default.
   and tool call — acceptable for a bar-chart-level trace viewer, not for
   precise latency SLOs.
 - Cost figures degrade to `None` (with a `detail` note) for a model
-  `genai-prices` doesn't recognize, rather than failing the cycle.
+  `genai-prices` doesn't recognize, rather than failing the cycle. A
+  backend that prices its own calls (Claude Code, ADR 0008) puts the cost
+  on the response's usage, and that figure is used as is.
