@@ -66,7 +66,7 @@ HX = Role(
     ),
     responsibilities=[
         "Search and read the notes relevant to each question",
-        "Cite the source note for every claim",
+        "Cite the source note for every claim, by its exact path only (e.g. `docs/x.md`), never with a section or page",
         "Classify each finding as evidence, assumption or gap",
         "Point out unvalidated assumptions behind an idea",
         "Propose status updates to assumptions when new evidence appears",

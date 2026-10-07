@@ -124,6 +124,7 @@ def _write_note(role: Role, kb: KnowledgeBase, path: str, content: str, *, appro
 
 
 _NOTE_TOOL_RETRIES = 3  # a wrong path guess shouldn't end the whole turn
+_HX_OUTPUT_RETRIES = 3  # a mis-cited source shouldn't end the whole conversation
 
 
 def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
@@ -159,14 +160,31 @@ def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
             return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)
 
 
+# A model often cites a section along with the note: `docs/x.md (§1 and §6)`,
+# `docs/x.md#Goals`, `docs/x.md, section 2`. The note is what must exist, so
+# whatever follows the `.md` is dropped.
+_SECTION_SUFFIX_RE = re.compile(r"(?<=\.md)[\s(#§,;:].*$", re.DOTALL)
+
+
+def _clean_source(kb: KnowledgeBase, source: str) -> str:
+    """The path of the note `source` cites; raises `ModelRetry` when no such note exists."""
+    for candidate in dict.fromkeys([source, _SECTION_SUFFIX_RE.sub("", source.strip())]):
+        try:
+            return kb.read(candidate).path
+        except (OSError, ValueError):
+            continue
+    raise ModelRetry(
+        f"source '{source}' does not exist in the knowledge base: cite the note's exact path only "
+        "(e.g. `docs/x.md`), with no section or page"
+    )
+
+
 def _sources_exist(kb: KnowledgeBase, output: HXAnswer) -> HXAnswer:
-    for finding in output.findings:
-        for source in finding.sources:
-            try:
-                kb.read(source)
-            except (OSError, ValueError):
-                raise ModelRetry(f"source '{source}' does not exist in the knowledge base") from None
-    return output
+    findings = [
+        finding.model_copy(update={"sources": [_clean_source(kb, source) for source in finding.sources]})
+        for finding in output.findings
+    ]
+    return output if findings == output.findings else output.model_copy(update={"findings": findings})
 
 
 def _register_source_validator(agent: Agent[KnowledgeBase, HXAnswer]) -> None:
@@ -303,6 +321,7 @@ def _build_agents(
         model,
         deps_type=KnowledgeBase,
         output_type=HXAnswer,  # no DeferredToolRequests: HX cannot request write approval (ADR 0004)
+        retries={"output": _HX_OUTPUT_RETRIES},
         system_prompt=_with_context(squad.instructions_for("hx"), context, language),
         **_skill_kwargs(build_role_skills, all_skills_dirs, squad["hx"]),
     )

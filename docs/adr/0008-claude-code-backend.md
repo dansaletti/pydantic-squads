@@ -48,6 +48,19 @@ their own login, locally; it cannot make that login part of a product.
   structured output such as a `Bet`) and the answer has none, the request
   is repeated once (`protocol_retries`) with a correction before Pydantic
   AI's own output retries are spent.
+- **A second correction: "function unavailable".** When an agent accepts
+  text but the answer says one of the offered functions is unavailable
+  (the model reached for a native Claude Code tool instead of
+  `tool_calls`), the request is repeated (`protocol_retries`) with a
+  correction, and an answer that still says so raises `ClaudeCodeError`.
+  Otherwise the agent answers from the prompt alone, without the
+  knowledge base, and the reply looks fine: nothing signals the failure.
+- **The protocol stays at the end of the system prompt.** Moving it to
+  the start was measured with the real CLI (Sonnet, the Growth PM with
+  its seven tools, six first messages each): with the protocol last the
+  agent called a tool in 6 of 6, with it first (plus a one-line reminder
+  at the end) in 1 of 6. A small sample, but not a change to retry
+  without measuring.
 - **Documented as local, personal use**, never as a way to ship the squad
   inside a product.
 
