@@ -24,3 +24,23 @@ items below are being built through it, in phases:
    a self-contained, mobile-first HTML prototype and grows the product's
    design system, with a deterministic coverage gate and founder questions
    — `ProductSquad.design()` (see ADR 0007).
+7. **Observability and checkpointing**: spans, cost and tokens per cycle,
+   persisted snapshots to resume a conversation, an optional OpenTelemetry
+   export and the `pydantic-squads trace` command —
+   `pydantic_squads.product.observability`, `.otel` and `pydantic_squads.cli`
+   (see ADR 0006).
+8. **Claude Code backend**: run the squad on a local Claude Code login
+   instead of an API key, keeping the squad's tools, approvals and
+   validators in Pydantic AI — `pydantic_squads.product.claude_code` (see
+   ADR 0008).
+9. **Terminal Gantt**: a standard-library chart of a run's spans per agent,
+   readable from a trace file — `pydantic_squads.visualization`,
+   `TerminalGantt.from_jsonl` (see ADR 0009).
+
+## Next
+
+Open, with no commitment:
+
+- Wire the Gantt into `pydantic-squads trace` (ADR 0009 left it as a
+  separate decision).
+- Show the Gantt from a live `ProductSquad` run, not only from a file.
