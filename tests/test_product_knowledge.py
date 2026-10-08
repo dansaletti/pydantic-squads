@@ -1,8 +1,17 @@
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from pydantic_squads.product import KnowledgeBase, MarkdownKnowledgeBase, format_note
+from pydantic_squads.product import (
+    KnowledgeBase,
+    MarkdownKnowledgeBase,
+    Note,
+    SerializedKnowledgeBase,
+    excerpt,
+    format_note,
+)
 
 VAULT = Path(__file__).parent / "fixtures" / "vault"
 
@@ -231,3 +240,122 @@ def test_search_ranks_the_whole_phrase_first(tmp_path):
     kb.write("c.md", "the dispatch manager")
     results = kb.search("dispatch manager")
     assert [n.path for n in results] == ["a.md", "c.md", "b.md"]
+
+
+# -- SerializedKnowledgeBase: one writer at a time (ADR 0010) ---------------
+
+
+class _SlowWriteKB(MarkdownKnowledgeBase):
+    """A knowledge base whose writes take a while and count how many overlap."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.writing = 0
+        self.most_at_once = 0
+        self._count_lock = threading.Lock()
+
+    def write(self, path: str, content: str) -> None:
+        with self._count_lock:
+            self.writing += 1
+            self.most_at_once = max(self.most_at_once, self.writing)
+        time.sleep(0.01)
+        super().write(path, content)
+        with self._count_lock:
+            self.writing -= 1
+
+
+def _write_from_threads(kb: KnowledgeBase, count: int) -> None:
+    start = threading.Barrier(count)
+
+    def write(i: int) -> None:
+        start.wait(timeout=5)
+        kb.write(f"squad/n{i}.md", f"note {i}")
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+
+def test_serialized_knowledge_base_writes_one_at_a_time(tmp_path):
+    """Writes from several threads never overlap behind a SerializedKnowledgeBase"""
+    inner = _SlowWriteKB(tmp_path)
+    _write_from_threads(SerializedKnowledgeBase(inner), 5)
+    assert inner.most_at_once == 1
+    assert sorted(p.name for p in (tmp_path / "squad").iterdir()) == [f"n{i}.md" for i in range(5)]
+
+
+def test_unserialized_writes_do_overlap(tmp_path):
+    """The same writes overlap without the wrapper, so the test above does prove the lock"""
+    inner = _SlowWriteKB(tmp_path)
+    _write_from_threads(inner, 5)
+    assert inner.most_at_once > 1
+
+
+def test_serialized_knowledge_base_passes_reads_through():
+    """search, read and list_by_tag answer exactly as the wrapped knowledge base does"""
+    inner = MarkdownKnowledgeBase(VAULT)
+    kb = SerializedKnowledgeBase(inner)
+    assert kb.read("context/product.md") == inner.read("context/product.md")
+    assert kb.search("onboarding") == inner.search("onboarding")
+    assert kb.list_by_tag("evidence") == inner.list_by_tag("evidence")
+
+
+def test_serialized_knowledge_base_satisfies_the_protocol_and_cannot_delete(tmp_path):
+    """SerializedKnowledgeBase is a KnowledgeBase and exposes no delete operation"""
+    assert isinstance(SerializedKnowledgeBase(MarkdownKnowledgeBase(tmp_path)), KnowledgeBase)
+    assert not hasattr(SerializedKnowledgeBase, "delete")
+
+
+def test_wrap_does_not_wrap_twice(tmp_path):
+    """wrap() returns an already serialized knowledge base unchanged, so there is one lock"""
+    kb = SerializedKnowledgeBase.wrap(MarkdownKnowledgeBase(tmp_path))
+    assert isinstance(kb, SerializedKnowledgeBase)
+    assert SerializedKnowledgeBase.wrap(kb) is kb
+
+
+# -- excerpt(): a note as a search result (ADR 0015) -------------------------
+
+_LONG = "Intro paragraph. " + "filler " * 80 + "Managers email routes to drivers every morning. " + "filler " * 80
+
+
+def test_excerpt_is_the_text_around_the_match_not_the_whole_note():
+    """excerpt() returns a short window around the matched words, marked where it was cut"""
+    note = Note(path="interviews/a.md", frontmatter={"tags": ["evidence"]}, content=_LONG)
+    result = excerpt(note, "email routes")
+    assert result.path == "interviews/a.md" and result.tags == ["evidence"]
+    assert result.size == len(_LONG)
+    [text] = result.excerpts
+    assert "Managers email routes to drivers" in text
+    assert len(text) <= 242 and text.startswith("…") and text.endswith("…")
+
+
+def test_excerpt_gives_one_window_per_distant_match_up_to_the_limit():
+    """Words matched far apart get an excerpt each, in note order, and never more than the limit"""
+    content = "alpha here. " + "filler " * 100 + "beta there. " + "filler " * 100 + "gamma last."
+    note = Note(path="a.md", content=content)
+    result = excerpt(note, "gamma alpha beta")
+    assert len(result.excerpts) == 2
+    assert "alpha here" in result.excerpts[0] and "beta there" in result.excerpts[1]
+    assert len(excerpt(note, "gamma alpha beta", limit=3).excerpts) == 3
+
+
+def test_excerpt_does_not_repeat_a_window_for_words_that_are_close():
+    """Two words inside the same window make one excerpt"""
+    note = Note(path="a.md", content="alpha and beta sit together in this short note")
+    assert excerpt(note, "alpha beta").excerpts == ["alpha and beta sit together in this short note"]
+
+
+def test_excerpt_falls_back_to_the_beginning_of_the_note():
+    """With no query, or a match only in the path, the excerpt is how the note begins"""
+    note = Note(path="docs/pricing.md", content="First line of the note.\n\nSecond   paragraph." + " tail" * 200)
+    for query in ("", "pricing", "de a"):
+        [text] = excerpt(note, query).excerpts
+        assert text.startswith("First line of the note. Second paragraph.") and text.endswith("…")
+
+
+def test_excerpt_of_an_empty_note_has_no_text():
+    """A note with no content yields no excerpt, only its path and size"""
+    result = excerpt(Note(path="a.md", content="  \n"), "alpha")
+    assert result.excerpts == [] and result.size == 3

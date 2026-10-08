@@ -30,6 +30,9 @@ class AgentMetrics:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    calls: int = 0
+    retried: int = 0
+    models: list[str] = field(default_factory=list)  # every model that answered for this agent
 
 
 @dataclass
@@ -41,7 +44,7 @@ class Report:
     agent_metrics: list[AgentMetrics] = field(default_factory=list)
     slow_spans: list[Any] = field(default_factory=list)
     hx_retries: list[Any] = field(default_factory=list)
-    po_send_backs: list[Any] = field(default_factory=list)
+    brief_rejections: list[Any] = field(default_factory=list)
     designer_send_backs: list[Any] = field(default_factory=list)
     pending_approvals: list[Any] = field(default_factory=list)
     cycle_input_tokens: int = 0
@@ -75,14 +78,19 @@ def build_report(
         m.input_tokens += span.input_tokens or 0
         m.output_tokens += span.output_tokens or 0
         m.cost_usd += span.cost_usd or 0.0
+        m.calls += 1
+        m.retried += span.status == "retry"
+        if span.model and span.model not in m.models:
+            m.models.append(span.model)
 
-    slow_spans = [s for s in spans if s.duration_ms > slow_threshold_ms]
+    # A "squad" span is a whole step of the request, as long as the runs inside it: not a slow call.
+    slow_spans = [s for s in spans if s.duration_ms > slow_threshold_ms and s.agent != "squad"]
     hx_retries = [
         s
         for s in spans
         if s.agent == "hx" and s.status == "retry" and s.detail and _HX_MISSING_SOURCE in s.detail
     ]
-    po_send_backs = [s for s in spans if s.agent == "product_owner" and s.output_type == "SendBack"]
+    brief_rejections = [s for s in spans if s.output_type == "BriefRejection"]
     designer_send_backs = [s for s in spans if s.agent == "designer" and s.output_type == "SendBack"]
     resolved_tool_call_ids = {s.tool_call_id for s in spans if s.operation == "approval_resolution"}
     pending_approvals = [
@@ -107,7 +115,7 @@ def build_report(
         agent_metrics=sorted(metrics.values(), key=lambda m: m.agent),
         slow_spans=slow_spans,
         hx_retries=hx_retries,
-        po_send_backs=po_send_backs,
+        brief_rejections=brief_rejections,
         designer_send_backs=designer_send_backs,
         pending_approvals=pending_approvals,
         cycle_input_tokens=cycle_input_tokens,
@@ -150,12 +158,22 @@ def print_report(report: Report) -> None:
 
     metrics_table = Table(title="Per-agent metrics")
     metrics_table.add_column("Agent")
+    metrics_table.add_column("Model")
+    metrics_table.add_column("Calls")
     metrics_table.add_column("Duration (ms)")
     metrics_table.add_column("Input tokens")
     metrics_table.add_column("Output tokens")
     metrics_table.add_column("Cost (USD)")
     for m in report.agent_metrics:
-        metrics_table.add_row(m.agent, f"{m.duration_ms:.0f}", str(m.input_tokens), str(m.output_tokens), f"{m.cost_usd:.4f}")
+        metrics_table.add_row(
+            m.agent,
+            ", ".join(m.models) or "-",
+            str(m.calls),
+            f"{m.duration_ms:.0f}",
+            str(m.input_tokens),
+            str(m.output_tokens),
+            f"{m.cost_usd:.4f}",
+        )
     console.print(metrics_table)
 
     console.print("[bold]Diagnostics[/bold]")
@@ -165,7 +183,9 @@ def print_report(report: Report) -> None:
     console.print(f"HX retries citing a missing source: {len(report.hx_retries)}")
     for s in report.hx_retries:
         console.print(f"  - {s.detail}")
-    console.print(f"Product Owner send-backs: {len(report.po_send_backs)}")
+    console.print(f"Brief rejections: {len(report.brief_rejections)}")
+    for s in report.brief_rejections:
+        console.print(f"  - {s.operation} ({s.agent})")
     console.print(f"Designer send-backs: {len(report.designer_send_backs)}")
     console.print(f"Pending approvals: {len(report.pending_approvals)}")
     for s in report.pending_approvals:

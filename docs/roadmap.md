@@ -6,17 +6,17 @@ items below are being built through it, in phases:
 
 1. **Hand-off contracts**: typed Pydantic models for what flows between
    roles — `pydantic_squads.product.contracts` (`Finding`, `HXAnswer`,
-   `Bet`, `Backlog`, `SendBack`).
+   `Triage`, `Opinion`, `Synthesis`, `Brief`, `Backlog`, `BriefRejection`,
+   `SendBack`, `MarketingGuidance`, `ContentPack`).
 2. **Knowledge base**: a protocol for reading and writing notes, with a
    markdown/Obsidian adapter, path containment and no delete operation —
    `pydantic_squads.product.knowledge`.
 3. **Assembly**: build Pydantic AI `Agent`s from the product roles,
    contracts and knowledge-base tools, behind the optional `ai` extra —
    `pydantic_squads.product.assembly`.
-4. **Flow helpers**: a human checkpoint before a bet reaches the Product
-   Owner, and one before a Growth-PM revision is resubmitted after a
-   Product Owner send-back — `ProductSquad.close_bet()`/`submit_bet()` in
-   the assembly module.
+4. **Flow helpers**: `submit_brief()` is the Product Owner's only door: it
+   takes a `Brief` a human approved and rejects anything else before the
+   model runs (see ADR 0011). The brief comes from the committee (item 10).
 5. **Skills**: per-role Agent Skills (`SKILL.md` plus `references/`,
    `assets/` and `scripts/`), behind the optional `skills` extra —
    `pydantic_squads.product.skills_integration` (see ADR 0005).
@@ -37,10 +37,21 @@ items below are being built through it, in phases:
    readable from a trace file — `pydantic_squads.visualization`,
    `TerminalGantt.from_jsonl` (see ADR 0009).
 
+10. **PM committee**: a neutral Facilitator as the only conversational
+    role, a committee of PMs (Growth, Product, Marketing) giving opinions
+    in parallel, a synthesis that keeps their disagreements and the gaps
+    HX reported, and one human gate (`approve`/`adjust`/`reject`) in front
+    of the Product Owner — `ProductSquad.close_request()`/`review()` and
+    `pydantic_squads.product.committee` (see ADRs 0010 to 0013).
+
+11. **Gantt of a live run**: a committee round is traced as one request
+    with its steps (triage, fan-out, rebuttal, synthesis), and
+    `ProductSquad.gantt()` draws the current cycle from memory, with or
+    without a trace file (see ADR 0014).
+
 ## Next
 
 Open, with no commitment:
 
 - Wire the Gantt into `pydantic-squads trace` (ADR 0009 left it as a
   separate decision).
-- Show the Gantt from a live `ProductSquad` run, not only from a file.

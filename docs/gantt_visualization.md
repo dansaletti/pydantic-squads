@@ -55,6 +55,33 @@ async def call_model(): ...
 collector.render_gantt(width=100)
 ```
 
+### From a product squad run
+
+`ProductSquad.gantt()` draws the current cycle from memory, with or without a `trace_dir`:
+
+```python
+squad.review("A fake-door landing page for route sharing")
+squad.gantt(width=120).print()
+```
+
+```
+ squad
+✓ request                       ███████████████████████████████████████████████████████████████      410.8ms
+✓   triage                      ██████████                                                            58.5ms
+✓   fan_out                              ██████████████████████████████                              173.0ms
+✓   synthesis                                                          ██████████                     58.6ms
+✓   rebuttal                                                                      ███████████         63.6ms
+✓   synthesis                                                                                ████     59.0ms
+
+ growth_pm
+✓     agent_run                          ██████████████████████████████                              169.6ms
+
+ pm_product
+✓     agent_run                          ██████████████████████████████                              169.6ms
+```
+
+(Abridged: the real chart also has the Facilitator's, HX's and the other PM's rows, and the model and tool calls inside each run.) The `squad` rows are the request and its steps, drawn first as the outline of the rest. Each role's runs are on that role's rows, indented under the step they belong to, so the PMs' opinions show as bars that overlap under `fan_out`. A cycle recorded to a file draws the same chart with `TerminalGantt.from_jsonl`. See [ADR 0014](adr/0014-request-steps-in-the-trace-and-a-live-gantt.md). `examples/committee_gantt.py` runs a whole round on a fake model and prints its chart.
+
 ## API
 
 **`TerminalGantt(width=120, show_ms=True, use_colors=True)`**
@@ -62,6 +89,7 @@ collector.render_gantt(width=100)
 - `add_span(name, start_ms, duration_ms, agent=None, status="ok")`: `status` is `ok`, `retry`, `error` or `awaiting_approval`.
 - `add_spans_from_trace({"spans": [{"name", "start", "duration", "agent", "status"}]})`.
 - `TerminalGantt.from_jsonl(path, **kwargs)`: builds a chart from a trace file (`Span` lines), indenting child spans.
+- `TerminalGantt.from_records(records, **kwargs)`: the same from span records already in memory (dicts with `span_id`, `parent_span_id`, `operation`, `started_at`, `duration_ms`, `agent`, `status`).
 - `collapse_gaps_ms` (constructor): idle stretches longer than this shrink to it, so a cycle resumed hours later stays readable. The time axis is then compressed, not real.
 - `render()` returns a string; `print()` prints it.
 
@@ -80,14 +108,19 @@ collector.render_gantt(width=100)
 
 | Agent | Color |
 |---|---|
+| `squad` (a request and its steps) | gray |
+| `facilitator` | white |
 | `growth_pm`, `pm_growth` | purple |
+| `pm_product` | teal |
+| `pm_marketing` | pink |
 | `nx` | green |
 | `hx` | cyan |
-| `po` | yellow |
+| `product_owner`, `po` | yellow |
 | `designer`, `design` | blue |
+| `social_media` | orange |
 | `social` | magenta |
 
-Other agents are cyan. A span with status `retry` is yellow, `error` is red and `awaiting_approval` (⏸) is magenta, whatever the agent. The map is `TerminalGantt.AGENT_COLORS`.
+Other agents are cyan. The `squad` group is drawn first and the others follow in name order. A span with status `retry` is yellow, `error` is red and `awaiting_approval` (⏸) is magenta, whatever the agent. The map is `TerminalGantt.AGENT_COLORS`.
 
 ## Troubleshooting
 
@@ -95,4 +128,4 @@ Other agents are cyan. A span with status `retry` is yellow, `error` is red and 
 - Terminal too narrow: `TerminalGantt(width=80)`.
 - Short spans next to a long one show as a single block: the chart scales to the total duration, so each bar is at least one character wide.
 
-Runnable examples are in `examples/gantt_example.py` and `examples/gantt_from_trace.py` (`python examples/gantt_from_trace.py TRACE.jsonl`); tests are in `tests/test_gantt_terminal.py`.
+Runnable examples are in `examples/gantt_example.py`, `examples/gantt_from_trace.py` (`python examples/gantt_from_trace.py TRACE.jsonl`) and `examples/committee_gantt.py` (needs the `ai` extra); tests are in `tests/test_gantt_terminal.py`.

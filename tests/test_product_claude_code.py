@@ -30,6 +30,8 @@ from pydantic_ai.tools import ToolDefinition
 
 from pydantic_squads.product.assembly import ProductSquad
 from pydantic_squads.product.claude_code import (
+    RECOMMENDED_MODEL,
+    RECOMMENDED_ROLE_MODELS,
     ClaudeCodeError,
     ClaudeCodeModel,
     ProcessResult,
@@ -322,12 +324,98 @@ def test_resolve_model_strings():
     assert resolve_model(sentinel) is sentinel
 
 
+def test_effort_is_passed_to_the_cli_and_shown_in_the_model_name():
+    """An effort level adds --effort to the command line and shows after the model's name"""
+    model = ClaudeCodeModel("sonnet", effort="high")
+    argv = model.argv("prompt.txt")
+    assert argv[argv.index("--effort") + 1] == "high"
+    assert model.model_name == "sonnet:high"
+    assert "--effort" not in ClaudeCodeModel("sonnet").argv("prompt.txt")
+
+
+def test_effort_must_be_a_level_the_cli_knows():
+    """An effort that is not one of the CLI's levels is refused when the model is built"""
+    with pytest.raises(ValueError, match="effort must be one of"):
+        ClaudeCodeModel("sonnet", effort="extreme")
+
+
+def test_model_string_can_carry_an_effort_level():
+    """`claude-code:<model>:<effort>` resolves to that model at that effort, and the default model can take one too"""
+    model = resolve_model("claude-code:sonnet:high")
+    assert (model.model_name, model.effort) == ("sonnet:high", "high")
+    assert resolve_model("claude-code:sonnet").effort is None
+    default = resolve_model("claude-code::max")
+    assert (default.model_name, default.effort) == ("default:max", "max")
+    assert "--model" not in default.argv("prompt.txt")
+
+
+def test_a_response_names_the_model_and_its_effort():
+    """What the trace records as the model is the name with its effort"""
+    runner = FakeRunner(_stdout({"text": "Hello!", "tool_calls": []}))
+    result = Agent(ClaudeCodeModel("sonnet", effort="high", runner=runner)).run_sync("Hi")
+    assert result.all_messages()[-1].model_name == "sonnet:high"
+    assert runner.calls[0]["argv"][-2:] == ["--effort", "high"]
+
+
+def test_recommended_setup_builds_a_squad(tmp_path):
+    """The recommended setup names real roles: PMs on Sonnet with thinking, HX on Haiku, the rest on Sonnet"""
+    squad = ProductSquad(
+        MarkdownKnowledgeBase(tmp_path), model=RECOMMENDED_MODEL, models=RECOMMENDED_ROLE_MODELS, context="ctx"
+    )
+    assert {agent.model.model_name for agent in squad._pms.values()} == {"sonnet:high"}
+    assert squad._marketing.model.model_name == "sonnet:high"
+    assert squad._hx.model.model_name == "haiku"
+    for agent in (squad._facilitator, squad._triager, squad._synthesizer, squad._po, squad._designer, squad._social):
+        assert agent.model.model_name == "sonnet"
+
+
 def test_product_squad_accepts_the_claude_code_model_string(tmp_path):
     """`ProductSquad(model="claude-code:sonnet")` builds every agent on Claude Code."""
     squad = ProductSquad(MarkdownKnowledgeBase(tmp_path), model="claude-code:sonnet", context="ctx")
-    for agent in (squad._growth_pm, squad._hx, squad._po, squad._designer):
+    for agent in (squad._facilitator, squad._triager, squad._synthesizer, squad._hx, squad._po, squad._designer, squad._social):
         assert isinstance(agent.model, ClaudeCodeModel)
         assert agent.model.model_name == "sonnet"
+
+
+def test_committee_fans_out_on_the_claude_code_backend(tmp_path):
+    """On Claude Code the PMs' opinions run as CLI processes that overlap, one per PM"""
+    running: list[str] = []
+    gates: dict[int, asyncio.Event] = {}
+    calls: list[str] = []
+
+    def final(arguments: dict) -> ProcessResult:
+        return ProcessResult(0, _stdout({"text": "", "tool_calls": [{"name": "final_result", "arguments": arguments}]}), "")
+
+    brief = dict(problem="p", hypothesis="h", success_metric="m", acceptance_criteria=["c"], owner_roles=["growth_pm"])
+
+    async def runner(argv, stdin, env, cwd, timeout):
+        system = Path(argv[argv.index("--system-prompt-file") + 1]).read_text(encoding="utf-8")
+        if "proposed_brief" in system:
+            calls.append("synthesis")
+            return final({"summary": "s", "proposed_brief": brief})
+        if "rationale" in system:
+            calls.append("triage")
+            return final({"request": "r", "roles": ["growth_pm", "pm_product", "pm_marketing"], "rationale": "all"})
+        calls.append("opinion")
+        gate = gates.setdefault(id(asyncio.get_running_loop()), asyncio.Event())
+        running.append(system.splitlines()[0])
+        if len(running) == 3:
+            gate.set()
+        # Processes started one after the other would never all be running: this would time out.
+        await asyncio.wait_for(gate.wait(), timeout=5)
+        return final({"recommendation": "Run it", "confidence": "medium"})
+
+    squad = ProductSquad(
+        MarkdownKnowledgeBase(tmp_path), model=ClaudeCodeModel("sonnet", runner=runner), context="ctx"
+    )
+    synthesis = squad.review("A fake-door landing page")
+    assert [o.role for o in synthesis.opinions] == ["growth_pm", "pm_product", "pm_marketing"]
+    assert sorted(running) == [
+        "You are the Growth PM of the Product squad.",
+        "You are the Marketing PM of the Product squad.",
+        "You are the Product PM of the Product squad.",
+    ]
+    assert calls == ["triage", "opinion", "opinion", "opinion", "synthesis"]
 
 
 def test_unavailable_function_claim_is_corrected_for_a_text_agent():

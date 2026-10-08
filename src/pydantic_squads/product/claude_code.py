@@ -292,11 +292,18 @@ def parse_result(stdout: str) -> tuple[list[ModelResponsePart], RequestUsage]:
     return parts, usage
 
 
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+"""The reasoning effort levels the `claude` CLI accepts (`--effort`)."""
+
+
 class ClaudeCodeModel(Model):
     """A Pydantic AI model backed by the local `claude` CLI and its logged-in account.
 
     `model_name` is passed to `claude --model` (e.g. `"sonnet"`, `"opus"`);
-    `None` keeps Claude Code's own default. `use_subscription=True` (the
+    `None` keeps Claude Code's own default. `effort` is passed to
+    `claude --effort` (`low`, `medium`, `high`, `xhigh` or `max`): the higher
+    levels make the model reason longer before answering, which costs
+    output tokens; `None` keeps the CLI's default. `use_subscription=True` (the
     default) removes API credentials from the subprocess environment so the
     login is used; set it to `False` to let Claude Code use them.
     `extra_args` are appended to every `claude` call. `cwd` is where the CLI
@@ -304,7 +311,7 @@ class ClaudeCodeModel(Model):
     `CLAUDE.md`, hooks or `.mcp.json` leak into the squad's context.
 
     When an agent only accepts a tool call (a structured output such as a
-    `Bet`) and the answer has none, or when a text answer claims one of the
+    `Backlog`) and the answer has none, or when a text answer claims one of the
     offered functions is unavailable (the model reached for a native Claude
     Code tool), the request is repeated up to `protocol_retries` times with
     a correction, before Pydantic AI's own output retries are spent on it.
@@ -329,9 +336,13 @@ class ClaudeCodeModel(Model):
         protocol_retries: int = 1,
         runner: Runner = run_process,
         settings: ModelSettings | None = None,
+        effort: str | None = None,
     ) -> None:
         super().__init__(settings=settings)
+        if effort is not None and effort not in EFFORT_LEVELS:
+            raise ValueError(f"effort must be one of {list(EFFORT_LEVELS)}, got '{effort}'")
         self._model_name = model_name
+        self.effort = effort
         self.executable = executable
         self.use_subscription = use_subscription
         self.timeout = timeout
@@ -342,7 +353,9 @@ class ClaudeCodeModel(Model):
 
     @property
     def model_name(self) -> str:
-        return self._model_name or "default"
+        """The model as a trace shows it: its name, with the effort level after a colon when one is set."""
+        name = self._model_name or "default"
+        return f"{name}:{self.effort}" if self.effort else name
 
     @property
     def system(self) -> str:
@@ -366,6 +379,8 @@ class ClaudeCodeModel(Model):
         ]
         if self._model_name:
             argv += ["--model", self._model_name]
+        if self.effort:
+            argv += ["--effort", self.effort]
         return argv + self.extra_args
 
     def env(self) -> dict[str, str]:
@@ -427,9 +442,34 @@ class ClaudeCodeModel(Model):
         return parse_result(result.stdout)
 
 
+RECOMMENDED_MODEL = "claude-code:sonnet"
+"""The model for the roles `RECOMMENDED_ROLE_MODELS` does not name."""
+
+RECOMMENDED_ROLE_MODELS: dict[str, str] = {
+    "growth_pm": "claude-code:sonnet:high",
+    "pm_product": "claude-code:sonnet:high",
+    "pm_marketing": "claude-code:sonnet:high",
+    "hx": "claude-code:haiku",
+}
+"""A tested setup for the product squad on Claude Code (ADR 0016).
+
+The PMs, which judge, run on Sonnet with extended thinking; HX, which
+retrieves and classifies, on Haiku; everyone else on `RECOMMENDED_MODEL`.
+Pass it as `ProductSquad(model=RECOMMENDED_MODEL, models=RECOMMENDED_ROLE_MODELS)`.
+It is a preset, not a default: `ProductSquad` uses one model for every
+role unless told otherwise.
+"""
+
+
 def resolve_model(model: Any) -> Any:
-    """Turn `"claude-code"` / `"claude-code:<model>"` into a `ClaudeCodeModel`; pass anything else through."""
+    """Turn a `"claude-code"` model string into a `ClaudeCodeModel`; pass anything else through.
+
+    `"claude-code"` is the CLI's default model, `"claude-code:<model>"` a
+    model, and `"claude-code:<model>:<effort>"` that model at a reasoning
+    effort (`low` to `max`): the higher levels are extended thinking.
+    """
     if isinstance(model, str) and (model == MODEL_PREFIX or model.startswith(f"{MODEL_PREFIX}:")):
-        _, _, name = model.partition(":")
-        return ClaudeCodeModel(name or None)
+        _, _, rest = model.partition(":")
+        name, _, effort = rest.partition(":")
+        return ClaudeCodeModel(name or None, effort=effort or None)
     return model

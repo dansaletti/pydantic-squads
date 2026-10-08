@@ -129,7 +129,7 @@ The JTBD Four Forces:
 
 ## Step 3: Create the Document
 
-After gathering information, write `docs/product-marketing.md` with `write_note` (the founder approves the write) using this structure:
+After gathering information, draft `docs/product-marketing.md` using this structure. If you have `write_note`, write it (the founder approves the write); if you do not, put the full draft in your answer so a role that can write it does:
 
 ```markdown
 # Product Marketing Context
@@ -241,7 +241,7 @@ After gathering information, write `docs/product-marketing.md` with `write_note`
     - `- v2 (2026-06-02) — Rewrote value prop and objections after 5 customer interviews; added competitor Acme.`
   - Use today's date in ISO form (YYYY-MM-DD) for the entry and `Last updated`.
   - **Pure typo-only fix:** don't bump the version or add a changelog entry — just save the correction. Every other change bumps the version and gets an entry. When the change is a real repositioning, say so plainly — downstream skills will now generate against the new context.
-- Save to `docs/product-marketing.md` with `write_note`
+- Save to `docs/product-marketing.md` with `write_note`, or hand over the full draft when you cannot write
 - Tell them: "Other marketing skills will now use this context automatically. The Changelog at the bottom tracks every revision — check it to see how your positioning has evolved. Ask me anytime to update it."
 
 ---

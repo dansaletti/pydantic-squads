@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -42,19 +43,22 @@ from pydantic_squads.product.assembly import (
 )
 from pydantic_squads.product.contracts import (
     Backlog,
-    Bet,
+    Brief,
+    BriefDraft,
+    BriefRejection,
     Finding,
     FindingKind,
     FounderQuestion,
+    HumanDecision,
     HXAnswer,
     Prototype,
-    Revision,
     Screen,
     SendBack,
     Story,
 )
-from pydantic_squads.product.knowledge import MarkdownKnowledgeBase
-from pydantic_squads.product.roles import DESIGNER, GROWTH_PM, HX, PRODUCT_OWNER
+from pydantic_squads.product.knowledge import MarkdownKnowledgeBase, SerializedKnowledgeBase
+from pydantic_squads.product.observability import HX_SINK, SpanSink, load_cycle
+from pydantic_squads.product.roles import DESIGNER, FACILITATOR, GROWTH_PM, HX, PRODUCT_OWNER
 
 pydantic_ai_models.ALLOW_MODEL_REQUESTS = False
 
@@ -235,12 +239,12 @@ def test_write_note_requires_approval(tmp_path):
         _write_note(role, kb, "docs/x.md", "content", approved=False)
 
 
-def test_growth_pm_write_note_requires_approval_for_assumptions(tmp_path):
-    """The real Growth PM role requires approval to write to assumptions/** (ADR 0004)"""
+def test_facilitator_write_note_requires_approval_for_assumptions(tmp_path):
+    """The real Facilitator role requires approval to write to assumptions/** (ADR 0004, ADR 0013)"""
     kb = MarkdownKnowledgeBase(tmp_path)
     with pytest.raises(ApprovalRequired):
-        _write_note(GROWTH_PM, kb, "assumptions/x.md", "content", approved=False)
-    result = _write_note(GROWTH_PM, kb, "assumptions/x.md", "content", approved=True)
+        _write_note(FACILITATOR, kb, "assumptions/x.md", "content", approved=False)
+    result = _write_note(FACILITATOR, kb, "assumptions/x.md", "content", approved=True)
     assert "approved" in result
     assert kb.read("assumptions/x.md").content == "content"
 
@@ -341,9 +345,14 @@ def _registered_tool_names(role: Role) -> list[str]:
     return captured["names"]
 
 
-def test_growth_pm_registers_exactly_its_declared_note_tools():
-    """The Growth PM's registered note tools match Role.tools exactly (list_by_tag is not declared)"""
-    assert _registered_tool_names(GROWTH_PM) == sorted(t for t in GROWTH_PM.tools if t != "consult_hx")
+def test_facilitator_registers_exactly_its_declared_note_tools():
+    """The Facilitator's registered note tools match Role.tools exactly (list_by_tag is not declared)"""
+    assert _registered_tool_names(FACILITATOR) == sorted(t for t in FACILITATOR.tools if t != "consult_hx")
+
+
+def test_growth_pm_registers_only_read_tools():
+    """The Growth PM, now a task role, registers read tools only"""
+    assert _registered_tool_names(GROWTH_PM) == ["read_note", "search_notes"]
 
 
 def test_hx_registers_exactly_its_declared_note_tools():
@@ -366,7 +375,7 @@ def test_consult_hx_registered_when_role_declares_it():
 
     pm_agent = Agent(FunctionModel(fn), deps_type=str)
     hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
-    _register_consult_hx(pm_agent, GROWTH_PM, hx_agent, [None])
+    _register_consult_hx(pm_agent, GROWTH_PM, hx_agent)
     pm_agent.run_sync("hi", deps="kb")
     assert "consult_hx" in captured["names"]
 
@@ -381,7 +390,7 @@ def test_consult_hx_not_registered_when_role_does_not_declare_it():
 
     po_agent = Agent(FunctionModel(fn), deps_type=str)
     hx_agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("x")])), deps_type=str)
-    _register_consult_hx(po_agent, PRODUCT_OWNER, hx_agent, [None])
+    _register_consult_hx(po_agent, PRODUCT_OWNER, hx_agent)
     po_agent.run_sync("hi", deps="kb")
     assert captured["names"] == []
 
@@ -481,29 +490,110 @@ def test_consult_hx_passes_usage_through(tmp_path):
     assert usage.requests == 1
 
 
+# -- HX as a parallel, stateless query tool (ADR 0010) ----------------------
+
+
+def _hx_answer(question: str = "q") -> HXAnswer:
+    return HXAnswer(
+        question=question,
+        summary="s",
+        findings=[Finding(claim="c", kind=FindingKind.EVIDENCE, sources=["interviews/a.md"])],
+    )
+
+
+def _hx_agent_that_waits_for(count: int) -> tuple[Agent, list[list]]:
+    """An HX agent whose model only answers once `count` consultations are in flight.
+
+    Consultations that ran one after the other would never get there, so an
+    answer proves they overlapped. Also returns the messages each call saw.
+    """
+    seen: list[list] = []
+    all_started = asyncio.Event()
+
+    async def fn(messages, info):
+        seen.append(messages)
+        if len(seen) == count:
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=5)
+        return _call_output_tool(_hx_answer())(messages, info)
+
+    return Agent(FunctionModel(fn), deps_type=MarkdownKnowledgeBase, output_type=HXAnswer), seen
+
+
+def test_hx_consultations_run_in_parallel_and_share_no_history(tmp_path):
+    """Several consult_hx calls overlap, and each one sees only its own question"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("interviews/a.md", "evidence text")
+    hx_agent, seen = _hx_agent_that_waits_for(3)
+
+    async def consult_all():
+        return await asyncio.gather(*(_consult_hx(hx_agent, kb, RunUsage(), f"question {i}") for i in range(3)))
+
+    assert asyncio.run(consult_all()) == [_hx_answer(f"question {i}") for i in range(3)]
+    assert sorted(len(messages) for messages in seen) == [1, 1, 1]
+    asked = sorted(messages[0].parts[-1].content for messages in seen)
+    assert asked == ["question 0", "question 1", "question 2"]
+
+
+def test_parallel_callers_each_collect_their_own_hx_run(tmp_path):
+    """Two runs consulting HX at once each find their own nested HX run in their own sink"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("interviews/a.md", "evidence text")
+    hx_agent, _seen = _hx_agent_that_waits_for(2)
+
+    async def run_caller(name: str, sink: SpanSink):
+        caller = Agent(
+            _scripted_model(_call_tool("consult_hx", {"question": f"from {name}"}), _text("done")),
+            deps_type=MarkdownKnowledgeBase,
+        )
+        _register_consult_hx(caller, GROWTH_PM, hx_agent)
+        HX_SINK.set(sink)  # as ProductSquad does around each run; gather gives each task its own context
+        await caller.run("go", deps=kb)
+
+    sinks = {"a": SpanSink(), "b": SpanSink()}
+
+    async def run_both():
+        await asyncio.gather(*(run_caller(name, sink) for name, sink in sinks.items()))
+
+    asyncio.run(run_both())
+    for name, sink in sinks.items():
+        [(agent, messages)] = sink.nested_runs.values()
+        assert agent == "hx"
+        assert messages[0].parts[-1].content == f"from {name}"
+    assert HX_SINK.get() is None
+
+
+def test_hx_agent_has_no_write_tool(tmp_path):
+    """The squad's HX agent is offered read tools only"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("interviews/a.md", "evidence text")
+    offered = {}
+
+    def fn(messages, info):
+        offered["names"] = sorted(t.name for t in info.function_tools)
+        return _call_output_tool(_hx_answer())(messages, info)
+
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=FunctionModel(fn))
+    asyncio.run(_consult_hx(squad._hx, squad.kb, RunUsage(), "q"))
+    assert offered["names"] == ["list_by_tag", "read_note", "search_notes"]
+
+
+def test_squad_serializes_writes_to_its_knowledge_base(tmp_path):
+    """ProductSquad puts its knowledge base behind a single writer, once"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())
+    assert isinstance(squad.kb, SerializedKnowledgeBase)
+    assert ProductSquad(squad.kb, context=TEST_CONTEXT, model=_scripted_model()).kb is squad.kb
+
+
 # -- ProductSquad: chat() --------------------------------------------------
 
 
-def test_chat_returns_growth_pm_reply(tmp_path):
-    """chat() sends the message to the Growth PM and returns its text reply"""
+def test_chat_returns_the_facilitators_reply(tmp_path):
+    """chat() sends the message to the Facilitator and returns its text reply"""
     kb = MarkdownKnowledgeBase(tmp_path)
     squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_text("Hi founder, what's on your mind?")))
     assert squad.chat("Hey") == "Hi founder, what's on your mind?"
-
-
-def test_chat_writes_note_in_write_glob(tmp_path):
-    """The Growth PM writes freely to a path covered by its write permission"""
-    kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        model=_scripted_model(
-            _call_tool("write_note", {"path": "squad/bets/x.md", "content": "draft"}),
-            _text("Saved the draft."),
-        ),
-    )
-    assert squad.chat("Save this bet draft") == "Saved the draft."
-    assert kb.read("squad/bets/x.md").content == "draft"
 
 
 def test_chat_write_outside_permissions_is_denied_and_retried(tmp_path):
@@ -521,8 +611,91 @@ def test_chat_write_outside_permissions_is_denied_and_retried(tmp_path):
     assert not (tmp_path / "elsewhere" / "x.md").exists()
 
 
+def _tool_returns(squad: ProductSquad, tool_name: str) -> list:
+    """What `tool_name` returned to the Facilitator, across the conversation so far."""
+    return [
+        part.content
+        for message in squad._history
+        for part in message.parts
+        if part.part_kind == "tool-return" and part.tool_name == tool_name
+    ]
+
+
+def test_search_notes_returns_excerpts_and_read_note_the_whole_note(tmp_path):
+    """search_notes hands back a short excerpt of a long note; read_note still hands back all of it"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    body = "start " + "filler " * 300 + "alpha is here " + "filler " * 300
+    kb.write("notes/a.md", "---\ntags: [x]\n---\n" + body)
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(
+            _call_tool("search_notes", {"query": "alpha"}),
+            _call_tool("read_note", {"path": "notes/a.md"}),
+            _text("Found it."),
+        ),
+    )
+    squad.chat("Look into alpha")
+    [[hit]] = _tool_returns(squad, "search_notes")
+    assert (hit.path, hit.tags, hit.size) == ("notes/a.md", ["x"], len(body))
+    assert "alpha is here" in hit.excerpts[0] and len(hit.excerpts[0]) < 250
+    [note] = _tool_returns(squad, "read_note")
+    assert note.content == body
+
+
+def test_search_notes_returns_the_eight_best_matches(tmp_path):
+    """A query matching many notes returns 8 of them, the best first"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    for i in range(12):
+        kb.write(f"notes/n{i:02}.md", "alpha")
+    kb.write("notes/best.md", "alpha beta")
+    squad = ProductSquad(
+        kb,
+        context=TEST_CONTEXT,
+        model=_scripted_model(_call_tool("search_notes", {"query": "alpha beta"}), _text("ok")),
+    )
+    squad.chat("search")
+    [hits] = _tool_returns(squad, "search_notes")
+    assert len(hits) == 8
+    assert hits[0].path == "notes/best.md"
+
+
+def test_committee_synthesis_is_readable_but_never_a_search_result(tmp_path):
+    """A synthesis note is left out of search and tag listings; the decision and the brief are not"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("squad/committee/c1/synthesis-1.md", "---\ntags: [x]\n---\nalpha synthesis")
+    kb.write("squad/committee/c1/decision.md", "---\ntags: [x]\n---\nalpha decision")
+    kb.write("squad/briefs/b1.md", "---\ntags: [x]\n---\nalpha brief")
+    found = ["squad/briefs/b1.md", "squad/committee/c1/decision.md"]
+    assert [n.path for n in _search_notes(HX, kb, "alpha")] == found
+    assert [n.path for n in _list_by_tag(HX, kb, "x")] == found
+    assert _read_note(HX, kb, "squad/committee/c1/synthesis-1.md").content == "alpha synthesis"
+
+
+def test_list_by_tag_returns_the_beginning_of_each_note(tmp_path):
+    """list_by_tag hands HX one excerpt per note, from its start, not the whole note"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    kb.write("notes/a.md", "---\ntags: [x]\n---\nOpening line. " + "filler " * 300)
+    captured = {}
+
+    def fn(messages, info):
+        for part in messages[-1].parts:
+            if part.part_kind == "tool-return":
+                captured["hits"] = part.content
+        if "hits" in captured:
+            return _call_output_tool(_hx_answer())(messages, info)
+        return ModelResponse(parts=[ToolCallPart("list_by_tag", {"tag": "x"})])
+
+    kb.write("interviews/a.md", "evidence text")
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=FunctionModel(fn))
+    asyncio.run(_consult_hx(squad._hx, squad.kb, RunUsage(), "q"))
+    [hit] = captured["hits"]
+    assert hit.path == "notes/a.md"
+    assert len(hit.excerpts) == 1 and hit.excerpts[0].startswith("Opening line.") and len(hit.excerpts[0]) < 250
+
+
 def test_chat_can_search_and_read_notes(tmp_path):
-    """The Growth PM can search and read notes through its own tools"""
+    """The Facilitator can search and read notes through its own tools"""
     kb = MarkdownKnowledgeBase(tmp_path)
     kb.write("notes/a.md", "---\ntags: [x]\n---\nalpha content")
     squad = ProductSquad(
@@ -538,7 +711,7 @@ def test_chat_can_search_and_read_notes(tmp_path):
 
 
 def test_hx_can_list_notes_by_tag(tmp_path):
-    """HX can list notes by tag through its own tools (not declared on the Growth PM)"""
+    """HX can list notes by tag through its own tools (not declared on the Facilitator)"""
     kb = MarkdownKnowledgeBase(tmp_path)
     kb.write("notes/a.md", "---\ntags: [x]\n---\nalpha content")
     answer = HXAnswer(
@@ -580,7 +753,7 @@ def test_chat_write_requires_approval_then_resumes(tmp_path):
 
 
 def test_consult_hx_delegates_to_hx_agent(tmp_path):
-    """The Growth PM's consult_hx tool runs the HX agent and returns its cited findings"""
+    """The Facilitator's consult_hx tool runs the HX agent and returns its cited findings"""
     kb = MarkdownKnowledgeBase(tmp_path)
     kb.write("interviews/a.md", "users get stuck at step 3")
     answer = HXAnswer(
@@ -638,8 +811,8 @@ def _system_prompt(messages) -> str:
     raise AssertionError("no SystemPromptPart found in the first request")
 
 
-def test_growth_pm_and_hx_instructions_include_product_context(tmp_path):
-    """Both the Growth PM's and HX's instructions include the given product context"""
+def test_facilitator_and_hx_instructions_include_product_context(tmp_path):
+    """Both the Facilitator's and HX's instructions include the given product context"""
     kb = MarkdownKnowledgeBase(tmp_path)
     kb.write("interviews/a.md", "evidence")
     answer = HXAnswer(
@@ -660,7 +833,7 @@ def test_growth_pm_and_hx_instructions_include_product_context(tmp_path):
     squad = ProductSquad(kb, model=FunctionModel(fn), context=TEST_CONTEXT)
     squad.chat("hi")
     assert len(captured_prompts) == 3
-    assert TEST_CONTEXT in captured_prompts[0]  # Growth PM
+    assert TEST_CONTEXT in captured_prompts[0]  # Facilitator
     assert TEST_CONTEXT in captured_prompts[1]  # HX
 
 
@@ -675,127 +848,115 @@ def test_product_owner_instructions_include_product_context(tmp_path):
         return _call_output_tool(backlog)(messages, info)
 
     squad = ProductSquad(kb, model=FunctionModel(fn), context=TEST_CONTEXT)
-    squad.submit_bet(_bet())
+    squad.submit_brief(_brief())
     assert TEST_CONTEXT in captured["prompt"]
 
 
-# -- ProductSquad: close_bet() / submit_bet() ------------------------------
+# -- ProductSquad: submit_brief() ------------------------------------------
 
 
-def _bet(**overrides) -> Bet:
+def _brief(**overrides) -> Brief:
     defaults = dict(
+        problem="New dispatch managers drop out of the signup wizard",
         hypothesis="Shortening onboarding lifts activation",
-        metric="activation_rate",
-        expected_impact="+5pp",
-        scope=["Signup wizard"],
-        out_of_scope=["Payments"],
+        success_metric="activation_rate +5pp",
+        acceptance_criteria=["The wizard has 3 steps"],
+        owner_roles=["growth_pm"],
+        human_decision=HumanDecision(verdict="approved", decided_at=datetime(2026, 1, 1, tzinfo=timezone.utc)),
     )
-    return Bet(**{**defaults, **overrides})
+    return Brief(**{**defaults, **overrides})
 
 
-def test_close_bet_forces_structured_bet_output(tmp_path):
-    """close_bet() asks the Growth PM to produce a structured Bet"""
-    kb = MarkdownKnowledgeBase(tmp_path)
-    bet = _bet()
-    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(bet)))
-    assert squad.close_bet() == bet
-
-
-def test_submit_bet_returns_backlog(tmp_path):
-    """submit_bet() hands the bet to the Product Owner and returns its Backlog"""
+def test_submit_brief_returns_backlog(tmp_path):
+    """submit_brief() hands an approved Brief to the Product Owner and returns its Backlog"""
     kb = MarkdownKnowledgeBase(tmp_path)
     backlog = Backlog(stories=[Story(title="Shorter wizard", acceptance_criteria=["3 steps"], needs_design=True)])
     squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(backlog)))
-    assert squad.submit_bet(_bet()) == backlog
+    assert squad.submit_brief(_brief()) == backlog
 
 
-def test_submit_bet_returns_revision_without_resubmitting_to_po(tmp_path):
-    """On a SendBack, submit_bet() returns a Revision instead of resubmitting it to the PO"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
-    revised_bet = _bet(scope=["Signup wizard", "web only"])
+def test_submit_brief_sends_the_whole_brief_to_the_product_owner(tmp_path):
+    """The Product Owner's prompt is the Brief itself, human decision included"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        # Only 2 turns: PO(SendBack), PM(revise). A 3rd call (a second PO
-        # run) would overrun the script and fail the test.
-        model=_scripted_model(_call_output_tool(send_back), _call_output_tool(revised_bet)),
-    )
-    result = squad.submit_bet(_bet())
-    assert isinstance(result, Revision)
-    assert result.bet == revised_bet
-    assert result.send_back == send_back
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=False)])
+    captured = {}
+
+    def fn(messages, info):
+        captured["prompt"] = messages[0].parts[-1].content
+        return _call_output_tool(backlog)(messages, info)
+
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=FunctionModel(fn))
+    squad.submit_brief(_brief())
+    assert Brief.model_validate_json(captured["prompt"]) == _brief()
 
 
-def test_submit_bet_resubmits_only_when_called_again_with_the_revision(tmp_path):
-    """The founder must call submit_bet(revision.bet) to actually reach the PO"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
-    revised_bet = _bet(scope=["Signup wizard", "web only"])
-    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=True)])
+def test_submit_brief_accepts_a_mapping(tmp_path):
+    """submit_brief() takes the brief as plain data too, validating it on the way in"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        model=_scripted_model(
-            _call_output_tool(send_back),  # PO, first submission
-            _call_output_tool(revised_bet),  # PM revises
-            _call_output_tool(backlog),  # PO, second submission (founder resubmitted)
-        ),
-    )
-    revision = squad.submit_bet(_bet())
-    assert isinstance(revision, Revision)
-    assert squad.submit_bet(revision.bet) == backlog
+    backlog = Backlog(stories=[Story(title="Story", acceptance_criteria=["done"], needs_design=False)])
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(backlog)))
+    assert squad.submit_brief(_brief().model_dump(mode="json")) == backlog
 
 
-def test_submit_bet_needs_a_bet_unless_resuming(tmp_path):
-    """submit_bet() without a bet and without a pending revision is a usage error"""
+def test_submit_brief_rejects_a_brief_without_a_decision_before_calling_the_model(tmp_path):
+    """A draft nobody approved comes back rejected and the Product Owner's model is never called"""
     kb = MarkdownKnowledgeBase(tmp_path)
+    draft = BriefDraft(**_brief().model_dump(exclude={"human_decision"}))
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())  # no turns: any call fails
+    rejection = squad.submit_brief(draft)
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == ["human_decision"]
+
+
+def test_submit_brief_rejects_missing_fields_before_calling_the_model(tmp_path):
+    """Every missing or empty field is named in the rejection, with no model call"""
+    kb = MarkdownKnowledgeBase(tmp_path)
+    data = _brief().model_dump(mode="json")
+    del data["hypothesis"]
+    data["acceptance_criteria"] = []
     squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model())
-    with pytest.raises(ValueError):
-        squad.submit_bet()
+    rejection = squad.submit_brief(data)
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == ["hypothesis", "acceptance_criteria"]
 
 
-def test_submit_bet_revision_can_defer_for_approval(tmp_path):
-    """submit_bet() surfaces a DeferredToolRequests if revising the bet needs write approval"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
+def test_submit_brief_returns_the_product_owners_rejection_without_revising(tmp_path):
+    """A Product Owner rejection is returned as is: nobody revises or resubmits the brief"""
     kb = MarkdownKnowledgeBase(tmp_path)
+    rejection = BriefRejection(missing_fields=["success_metric"], reason="The metric has no baseline")
+    # One turn only: a revision or a second Product Owner run would overrun the script.
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(rejection)))
+    assert squad.submit_brief(_brief()) == rejection
+
+
+def test_invalid_brief_is_recorded_in_the_trace(tmp_path):
+    """A brief rejected before the model runs still leaves a BriefRejection span in the trace"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(), trace_dir=trace_dir)
+
+    squad.submit_brief({})
+
+    _header, spans, _snapshot = load_cycle(trace_dir, squad.cycle_id)
+    [span] = spans
+    assert (span.agent, span.operation, span.status) == ("product_owner", "brief_validation", "error")
+    assert span.output_type == "BriefRejection"
+    assert "problem" in span.detail
+
+
+def test_product_owner_rejection_is_stamped_on_its_model_call_span(tmp_path):
+    """A Product Owner rejection shows in the trace as a model call whose output was a BriefRejection"""
+    kb = MarkdownKnowledgeBase(tmp_path / "vault")
+    trace_dir = tmp_path / "traces"
+    rejection = BriefRejection(reason="Too vague to split into stories")
     squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        model=_scripted_model(
-            _call_output_tool(send_back),
-            _call_tool("write_note", {"path": "docs/context.md", "content": "notes"}),
-        ),
+        kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(rejection)), trace_dir=trace_dir
     )
-    result = squad.submit_bet(_bet())
-    assert isinstance(result, DeferredToolRequests)
 
+    squad.submit_brief(_brief())
 
-def test_submit_bet_resume_after_deferred_revision_does_not_call_po_again(tmp_path):
-    """Resuming a deferred bet revision resumes only the Growth PM, never the Product Owner"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
-    revised_bet = _bet(scope=["Signup wizard", "web only"])
-    kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        # Exactly 3 turns: PO(SendBack), PM(defers on write_note), PM(resumed
-        # -> Bet). A stray 4th call (an unexpected PO re-run) would overrun
-        # the script and fail the test.
-        model=_scripted_model(
-            _call_output_tool(send_back),
-            _call_tool("write_note", {"path": "docs/context.md", "content": "notes"}),
-            _call_output_tool(revised_bet),
-        ),
-    )
-    pending = squad.submit_bet(_bet())
-    assert isinstance(pending, DeferredToolRequests)
-
-    resumed = squad.submit_bet(deferred_tool_results=pending.build_results(approve_all=True))
-    assert isinstance(resumed, Revision)
-    assert resumed.bet == revised_bet
-    assert resumed.send_back == send_back
-    assert kb.read("docs/context.md").content == "notes"
+    _header, spans, _snapshot = load_cycle(trace_dir, squad.cycle_id)
+    assert [s.output_type for s in spans if s.operation == "model_call"] == ["BriefRejection"]
 
 
 # -- ProductSquad: observability (ADR 0006) --------------------------------
@@ -838,51 +999,6 @@ def test_chat_without_trace_dir_writes_no_trace_file_but_still_has_a_cycle_id(tm
 
     assert squad.cycle_id is not None
     assert not (tmp_path / f"{squad.cycle_id}.jsonl").exists()
-
-
-def test_close_bet_writes_a_bet_note_with_frontmatter(tmp_path):
-    """close_bet() writes a squad/bets/<id>.md note carrying cycle_id/schema_version/bet_version_id"""
-    kb = MarkdownKnowledgeBase(tmp_path)
-    bet = _bet()
-    squad = ProductSquad(kb, context=TEST_CONTEXT, model=_scripted_model(_call_output_tool(bet)))
-
-    squad.close_bet()
-
-    bet_notes = list((tmp_path / "squad" / "bets").glob("*.md"))
-    assert len(bet_notes) == 1
-    note = kb.read(f"squad/bets/{bet_notes[0].stem}.md")
-    assert note.frontmatter["cycle_id"] == squad.cycle_id
-    assert note.frontmatter["schema_version"] == "1"
-    assert note.frontmatter["bet_version_id"] == bet_notes[0].stem
-    assert "previous_bet_version_id" not in note.frontmatter
-    assert bet.hypothesis in note.content
-
-
-def test_bet_revision_note_carries_previous_bet_version_id(tmp_path):
-    """A revised Bet's note carries previous_bet_version_id pointing at the Bet it replaced"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platform?"])
-    revised_bet = _bet(scope=["Signup wizard", "web only"])
-    kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        context=TEST_CONTEXT,
-        model=_scripted_model(
-            _call_output_tool(_bet()),  # close_bet()
-            _call_output_tool(send_back),  # PO sends it back
-            _call_output_tool(revised_bet),  # PM revises
-        ),
-    )
-    squad.close_bet()
-    before = {p.stem for p in (tmp_path / "squad" / "bets").glob("*.md")}
-
-    result = squad.submit_bet(_bet())
-
-    assert isinstance(result, Revision)
-    after = {p.stem for p in (tmp_path / "squad" / "bets").glob("*.md")}
-    new_id = next(iter(after - before))
-    first_id = next(iter(before))
-    note = kb.read(f"squad/bets/{new_id}.md")
-    assert note.frontmatter["previous_bet_version_id"] == first_id
 
 
 def test_resume_continues_a_conversation_from_a_saved_cycle(tmp_path):
@@ -1032,7 +1148,13 @@ def _return_prototype(stories: list[str] | None = None, questions: list[FounderQ
 
 
 def _question(**overrides) -> FounderQuestion:
-    defaults = dict(question="Which tone?", context="Brand is undefined", origin="positioning", suggested_default="Friendly")
+    defaults = dict(
+        question="Which tone?",
+        context="Nobody was asked",
+        origin="hx_gap",
+        suggested_default="Friendly",
+        hx_question="Which tone do users expect?",
+    )
     return FounderQuestion(**{**defaults, **overrides})
 
 
@@ -1203,8 +1325,8 @@ def test_design_resume_needs_a_pending_design_run(tmp_path):
 
 
 def test_designer_registers_exactly_its_declared_note_tools():
-    """The Designer's registered note tools match Role.tools, minus consult_hx"""
-    assert _registered_tool_names(DESIGNER) == sorted(t for t in DESIGNER.tools if t != "consult_hx")
+    """The Designer's registered note tools match Role.tools, minus the consult tools"""
+    assert _registered_tool_names(DESIGNER) == sorted(t for t in DESIGNER.tools if not t.startswith("consult_"))
 
 
 def test_designer_instructions_include_product_context(tmp_path):

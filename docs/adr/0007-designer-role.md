@@ -1,6 +1,9 @@
 # 0007. A Designer role turns the Backlog into a prototype
 
-Status: accepted
+Status: accepted, partly superseded by [ADR 0011](0011-brief-is-the-product-owners-only-door.md)
+(the Product Owner now takes a Brief, and the trace CLI counts brief rejections)
+and by [ADR 0012](0012-marketing-pm-owns-brand-and-social-media-executes.md)
+(brand questions go to the Marketing PM before the founder)
 
 ## Context
 

@@ -1,6 +1,7 @@
 """Tests for the terminal Gantt chart."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -180,3 +181,38 @@ def test_from_jsonl_without_spans_is_empty(tmp_path) -> None:
     path = tmp_path / "t.jsonl"
     path.write_text('{"kind": "CycleHeader", "data": {}}\n')
     assert "No spans" in TerminalGantt.from_jsonl(path).render()
+
+
+def test_from_records_builds_the_same_chart_as_the_file(tmp_path) -> None:
+    """from_records takes the span dicts directly; from_jsonl is the same thing read from a file."""
+    records = [
+        {"span_id": "a", "parent_span_id": None, "agent": "squad", "operation": "request",
+         "started_at": "2026-10-06T20:00:00Z", "duration_ms": 10},
+        {"span_id": "b", "parent_span_id": "a", "agent": "squad", "operation": "fan_out",
+         "started_at": "2026-10-06T20:00:00Z", "duration_ms": 5},
+        {"span_id": "c", "parent_span_id": "b", "agent": "pm_product", "operation": "agent_run",
+         "started_at": "2026-10-06T20:00:00Z", "duration_ms": 5},
+    ]  # fmt: skip
+    path = tmp_path / "trace.jsonl"
+    path.write_text("\n".join(json.dumps({"kind": "Span", "data": r}) for r in records))
+    g = TerminalGantt.from_records(iter(records), use_colors=False)
+    assert [s.name for s in g.spans] == ["request", "  fan_out", "    agent_run"]
+    assert g.render() == TerminalGantt.from_jsonl(path, use_colors=False).render()
+
+
+def test_every_product_squad_role_has_a_color_of_its_own() -> None:
+    """The product squad's roles and the squad's own spans each map to a distinct, defined color."""
+    roles = ["squad", "facilitator", "growth_pm", "pm_product", "pm_marketing", "hx",
+             "product_owner", "designer", "social_media"]  # fmt: skip
+    colors = [TerminalGantt.AGENT_COLORS[role] for role in roles]
+    assert len(set(colors)) == len(roles)
+    assert all(color in TerminalGantt.COLORS for color in colors)
+
+
+def test_squad_rows_come_before_the_agents() -> None:
+    """The "squad" group, a request's outline, is drawn first; the agents follow in name order."""
+    g = TerminalGantt(use_colors=False)
+    for agent in ("hx", "squad", "facilitator"):
+        g.add_span("agent_run", 0, 10, agent=agent)
+    out = g.render()
+    assert out.index(" squad ") < out.index(" facilitator ") < out.index(" hx ")

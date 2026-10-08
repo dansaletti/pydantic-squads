@@ -1,6 +1,8 @@
 # 0004. HX cannot request write approval
 
-Status: accepted
+Status: accepted, partly superseded by [ADR 0010](0010-hx-is-a-read-only-query-tool.md)
+(HX no longer has the free `squad/hx/**` write permission either)
+and by [ADR 0013](0013-pm-committee-with-a-single-human-gate.md) (the role that carries out an approved write is the Facilitator)
 
 ## Context
 

@@ -229,34 +229,50 @@ def test_product_squad_without_skills_dirs_needs_no_skills_extra(tmp_path):
     assert squad.chat("hello") == "hi"
 
 
-def test_product_squad_growth_pm_can_load_its_own_skill(tmp_path):
-    """With skills_dirs set, the Growth PM can load the library's prioritization skill"""
-    kb = MarkdownKnowledgeBase(tmp_path)
+def _opinion_draft():
+    """A model turn returning an OpinionDraft through whichever output tool the agent offers."""
+
+    def turn(messages, info):
+        args = {"recommendation": "Rank by impact", "confidence": "medium"}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return turn
+
+
+def _growth_pm_retries(tmp_path, skill: str) -> list[RetryPromptPart]:
+    """Have the squad's Growth PM try to load `skill`, and return the retry prompts it got back."""
     squad = ProductSquad(
-        kb,
-        model=_scripted_model(
-            _call_tool("load_capability", {"id": "prioritization"}),
-            _text("prioritized"),
-        ),
+        MarkdownKnowledgeBase(tmp_path),
+        model=_scripted_model(_call_tool("load_capability", {"id": skill}), _opinion_draft()),
         context=TEST_CONTEXT,
         skills_dirs=[],
     )
-    assert squad.chat("Rank these bets") == "prioritized"
+    result = squad._pms["growth_pm"].run_sync("Give your opinion", deps=squad.kb)
+    return [p for m in result.all_messages() for p in m.parts if isinstance(p, RetryPromptPart)]
+
+
+def test_product_squad_growth_pm_can_load_its_own_skill(tmp_path):
+    """With skills_dirs set, the Growth PM can load the library's prioritization skill"""
+    assert _growth_pm_retries(tmp_path, "prioritization") == []
 
 
 def test_product_squad_growth_pm_cannot_load_hx_skill(tmp_path):
     """The Growth PM's agent cannot load HX's evidence-classification skill"""
+    assert _growth_pm_retries(tmp_path, "evidence-classification")
+
+
+def test_facilitator_has_no_skills_to_load(tmp_path):
+    """The Facilitator declares no skill, so with skills on it is offered no way to load one"""
     kb = MarkdownKnowledgeBase(tmp_path)
-    squad = ProductSquad(
-        kb,
-        model=_scripted_model(
-            _call_tool("load_capability", {"id": "evidence-classification"}),
-            _text("could not"),
-        ),
-        context=TEST_CONTEXT,
-        skills_dirs=[],
-    )
-    assert squad.chat("Classify this") == "could not"
+    offered = {}
+
+    def fn(messages, info):
+        offered["tools"] = [t.name for t in info.function_tools]
+        return ModelResponse(parts=[TextPart("hi")])
+
+    squad = ProductSquad(kb, model=FunctionModel(fn), context=TEST_CONTEXT, skills_dirs=[])
+    squad.chat("hello")
+    assert "load_capability" not in offered["tools"]
 
 
 def test_product_squad_consumer_skills_dir_supplements_library(tmp_path):
