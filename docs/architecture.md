@@ -173,6 +173,7 @@ A *cycle* is one request, from its conversation to what is built from its brief.
 | `product.knowledge` | the `KnowledgeBase` protocol and the markdown adapter | no |
 | `product.assembly` | `ProductSquad`: builds the agents, holds the state, guards the gate | yes |
 | `product.committee` | one round: opinions, rebuttal, synthesis, gaps, the synthesis note | yes |
+| `product.chat` | `pydantic-squads chat`: the squad as a terminal session | yes |
 | `product.observability` | spans and the trace file | yes |
 | `product.claude_code` | running on a local Claude Code login | yes |
 | `product.skills_integration`, `product.otel` | optional skills and telemetry export | yes |

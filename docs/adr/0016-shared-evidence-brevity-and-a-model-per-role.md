@@ -53,7 +53,7 @@ tested setup for Claude Code as a preset, `RECOMMENDED_MODEL` and
 extended thinking, HX on Haiku, the rest on Sonnet. On the vault of the
 measured runs that setup, with everything else in this record and in ADR
 0015, took a request from an estimated US$ 4.74 to US$ 0.64. A caller opts
-into it; the example in `examples/committee_chat.py` does by default. Making the rebuttal
+into it; `pydantic-squads chat` (ADR 0017) does by default. Making the rebuttal
 optional was considered and left out: it removes something the human sees
 at the gate.
 

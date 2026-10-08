@@ -173,6 +173,7 @@ Um *ciclo* é um pedido, da conversa até o que é construído a partir do brief
 | `product.knowledge` | o protocolo `KnowledgeBase` e o adaptador markdown | não |
 | `product.assembly` | `ProductSquad`: monta os agentes, guarda o estado, protege o gate | sim |
 | `product.committee` | uma rodada: pareceres, réplica, síntese, lacunas, a nota da síntese | sim |
+| `product.chat` | `pydantic-squads chat`: a squad como sessão de terminal | sim |
 | `product.observability` | spans e o arquivo de trace | sim |
 | `product.claude_code` | rodar num login local do Claude Code | sim |
 | `product.skills_integration`, `product.otel` | skills opcionais e exportação de telemetria | sim |

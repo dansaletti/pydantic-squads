@@ -49,6 +49,10 @@ items below are being built through it, in phases:
     `ProductSquad.gantt()` draws the current cycle from memory, with or
     without a trace file (see ADR 0014).
 
+12. **Terminal session**: `pydantic-squads chat VAULT` runs the whole flow
+    with no code to write, on the recommended Claude Code setup by default
+    — `pydantic_squads.product.chat` (see ADR 0017).
+
 ## Next
 
 Open, with no commitment:
