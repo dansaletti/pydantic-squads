@@ -1287,6 +1287,11 @@ class ProductSquad:
         self._cycle_id = cycle_id
         self._recorder = CycleRecorder(self._trace_dir, cycle_id)
 
+    @property
+    def spans(self) -> list[Span]:
+        """The current cycle's spans so far, whether or not there is a `trace_dir`."""
+        return list(self._spans)
+
     def gantt(self, **kwargs: Any) -> TerminalGantt:
         """A Gantt chart of the current cycle, from memory: no `trace_dir` needed.
 

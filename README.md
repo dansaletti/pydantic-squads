@@ -148,25 +148,45 @@ if isinstance(outcome, BriefRejection):
 `squad.review("...")` takes a request to the committee directly, with no
 conversation before it.
 
-### Trying it from a clone
+### Talking to it from a terminal
 
-`examples/committee_chat.py` is this whole flow as a terminal session, on a
-real model. You need [uv](https://docs.astral.sh/uv/),
+`pydantic-squads chat` is this whole flow as a terminal session, on a real
+model, with no code to write. You need
 [Claude Code](https://code.claude.com) installed and logged in (`claude`,
-then `/login`), and a folder of markdown notes to use as the knowledge base:
+then `/login`) and a folder of markdown notes to use as the knowledge base:
 
 ```bash
-git clone https://github.com/dansaletti/pydantic-squads && cd pydantic-squads
-uv run --extra ai python examples/committee_chat.py PATH/TO/VAULT \
+pip install "pydantic-squads[ai,observability] @ git+https://github.com/dansaletti/pydantic-squads"
+pydantic-squads chat PATH/TO/VAULT \
   --context "What your product is and who it is for" \
   --trace-dir ./traces
 ```
 
-Type your request, then `/close` to take it to the committee, `/approve`,
-`/submit`, and `/gantt` to see the round and what it cost. With no model
-option it runs the [recommended setup](#recommended-setup) on your Claude
-Code login, which counts against your plan's limits. `--model` takes any
-Pydantic AI model string instead, to run on an API key.
+From a clone of this repo, with [uv](https://docs.astral.sh/uv/):
+`uv run --extra ai --extra observability pydantic-squads chat PATH/TO/VAULT`.
+
+Type your request, then:
+
+| Command | What it does |
+| --- | --- |
+| `/close` | Close the conversation and take the request to the committee |
+| `/review TEXT` | Take TEXT to the committee directly, with no conversation |
+| `/approve [NOTES]`, `/adjust NOTES`, `/reject REASON` | Your decision on the synthesis |
+| `/submit` | Hand the approved Brief to the Product Owner |
+| `/content`, `/design` | Have Social Media write the content, or the Designer the prototype |
+| `/gantt`, `/cost` | Draw the cycle with its cost, or show only the cost per agent |
+| `/resume CYCLE_ID` | Continue an earlier conversation (needs `--trace-dir`) |
+| `/help`, `/quit` | The list of commands; leave, showing the cost |
+
+A write that needs your approval is shown and waits for your yes or no.
+With no model option the session runs the
+[recommended setup](#recommended-setup) on your Claude Code login, which
+counts against your plan's limits. `--model` takes any Pydantic AI model
+string instead, to run on an API key; `--pm-model`, `--hx-model` and
+`--role-model ROLE=MODEL` change single roles. `--context` also takes a
+path to a file, `--language pt-BR` makes the agents answer in Portuguese,
+and `--skills` gives the roles the library's skills. See
+[ADR 0017](docs/adr/0017-chat-command.md).
 
 What holds this together, by code and not by prompt:
 
@@ -222,7 +242,7 @@ id to its model, and every role not named uses `model`
 ([ADR 0016](docs/adr/0016-shared-evidence-brevity-and-a-model-per-role.md)).
 
 The library ships one tested setup for Claude Code as a preset. It is what
-the example uses by default:
+`pydantic-squads chat` uses by default:
 
 ```python
 from pydantic_squads.product.claude_code import RECOMMENDED_MODEL, RECOMMENDED_ROLE_MODELS
@@ -496,7 +516,8 @@ See [docs/roadmap.md](docs/roadmap.md).
 uv sync  # add --extra ai for tests/test_product_assembly.py, tests/test_product_committee.py,
          # tests/test_product_marketing.py and tests/test_product_observability.py,
          # --extra skills for tests/test_product_skills.py,
-         # --extra observability for tests/test_cli.py, --extra otel for tests/test_product_otel.py
+         # --extra observability for tests/test_cli.py and tests/test_product_chat.py,
+         # --extra otel for tests/test_product_otel.py
 uv run pytest
 uv run pytest --cov=pydantic_squads --cov-report=term-missing  # coverage stays at 100%
 ```

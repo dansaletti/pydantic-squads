@@ -1,17 +1,19 @@
 """`pydantic-squads` command-line entry point.
 
-Currently just `trace`, the local trace viewer for a cycle recorded by
-`ProductSquad(trace_dir=...)` (ADR 0006). Needs the `ai` extra (to read a
-trace file's spans) and the `observability` extra (`rich`, to render them);
-both are imported lazily so importing this module alone never requires
-either.
+`trace` is the local trace viewer for a cycle recorded by
+`ProductSquad(trace_dir=...)` (ADR 0006). `chat` is a terminal session
+with the product squad (ADR 0017). Both need the `ai` extra and the
+`observability` extra (`rich`); they are imported lazily, so importing
+this module alone never requires either.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +69,19 @@ def build_report(
     from pydantic_squads.product.observability import load_cycle
 
     _header, raw_spans, _snapshot = load_cycle(trace_dir, cycle_id)
+    return report_from_spans(
+        cycle_id, raw_spans, budget_tokens=budget_tokens, slow_threshold_ms=slow_threshold_ms
+    )
+
+
+def report_from_spans(
+    cycle_id: str,
+    raw_spans: Iterable[Any],
+    *,
+    budget_tokens: int | None = None,
+    slow_threshold_ms: float = DEFAULT_SLOW_THRESHOLD_MS,
+) -> Report:
+    """The same report from spans already in hand, such as a running squad's (`ProductSquad.spans`)."""
     spans = sorted(raw_spans, key=lambda s: s.started_at)
 
     metrics: dict[str, AgentMetrics] = {}
@@ -196,6 +211,83 @@ def print_report(report: Report) -> None:
         console.print(f"[red]  - {s.operation} ({s.agent}): {s.input_tokens} input tokens[/red]")
 
 
+_EXTRAS_HINT = "pip install 'pydantic-squads[ai,observability]'"
+
+
+def role_models(
+    pm_model: str | None,
+    hx_model: str | None,
+    pairs: Iterable[str],
+    committee: Iterable[str],
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """The role -> model map of `chat`: `base`, then the PMs' and HX's shorthands, then each `ROLE=MODEL` pair."""
+    models = dict(base or {})
+    if pm_model:
+        models.update(dict.fromkeys(committee, pm_model))
+    if hx_model:
+        models["hx"] = hx_model
+    for pair in pairs:
+        role_id, _, model = pair.partition("=")
+        models[role_id.strip()] = model.strip()
+    return models
+
+
+def _chat(args: argparse.Namespace) -> int:
+    """Run `pydantic-squads chat`: a terminal session with the product squad (ADR 0017)."""
+    try:
+        from pydantic_ai import UsageLimits
+
+        from pydantic_squads.product import COMMITTEE_ROLES, MarkdownKnowledgeBase
+        from pydantic_squads.product.assembly import ProductSquad
+        from pydantic_squads.product.chat import ChatSession
+        from pydantic_squads.product.claude_code import RECOMMENDED_MODEL, RECOMMENDED_ROLE_MODELS
+    except ImportError:
+        print(f"pydantic-squads chat needs: {_EXTRAS_HINT}", file=sys.stderr)
+        return 1
+
+    vault = Path(args.vault)
+    if not vault.is_dir():
+        print(f"pydantic-squads chat: '{vault}' is not a folder of notes", file=sys.stderr)
+        return 1
+    # No --model: the recommended Claude Code setup, which the other model options can still adjust.
+    model = args.model or RECOMMENDED_MODEL
+    models = role_models(
+        args.pm_model, args.hx_model, args.role_model, COMMITTEE_ROLES, None if args.model else RECOMMENDED_ROLE_MODELS
+    )
+    if any(m.startswith("claude-code") for m in (model, *models.values())) and shutil.which("claude") is None:
+        print(
+            "pydantic-squads chat: Claude Code was not found. Install it and log in with `claude`, "
+            "or pass --model with another Pydantic AI model.",
+            file=sys.stderr,
+        )
+        return 1
+    context = Path(args.context).read_text(encoding="utf-8") if Path(args.context).is_file() else args.context
+    skills_dirs = [Path(d) for d in args.skills_dir] if args.skills or args.skills_dir else None
+
+    def make_squad() -> Any:
+        return ProductSquad(
+            MarkdownKnowledgeBase(vault),
+            model=model,
+            models=models,
+            context=context,
+            language=args.language,
+            skills_dirs=skills_dirs,
+            usage_limits=UsageLimits(request_limit=args.request_limit) if args.request_limit else None,
+            trace_dir=args.trace_dir,
+        )
+
+    try:
+        session = ChatSession(make_squad)
+    except ValueError as exc:  # a --role-model naming a role the squad does not have
+        print(f"pydantic-squads chat: {exc}", file=sys.stderr)
+        return 1
+    exceptions = ", ".join(f"{role_id} on {m}" for role_id, m in models.items())
+    session.console.print(f"Model: {model}" + (f" (except {exceptions})" if exceptions else ""))
+    session.run()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pydantic-squads")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -208,7 +300,32 @@ def main(argv: list[str] | None = None) -> int:
     trace_parser.add_argument("--budget-tokens", type=int, default=None)
     trace_parser.add_argument("--slow-threshold-ms", type=float, default=DEFAULT_SLOW_THRESHOLD_MS)
 
+    chat_parser = subparsers.add_parser("chat", help="Talk to the product squad in a terminal")
+    chat_parser.add_argument("vault", help="a folder of markdown notes: the knowledge base")
+    chat_parser.add_argument("--context", default="", help="what the product is, or a path to a file saying so")
+    chat_parser.add_argument(
+        "--model", default=None, help="model for every role not named; omit for the recommended Claude Code setup"
+    )
+    chat_parser.add_argument("--pm-model", default=None, help="model for the three PMs")
+    chat_parser.add_argument("--hx-model", default=None, help="model for HX")
+    chat_parser.add_argument(
+        "--role-model", action="append", default=[], metavar="ROLE=MODEL", help="model for one role; repeatable"
+    )
+    chat_parser.add_argument("--language", default="en", choices=["en", "pt-BR"])
+    chat_parser.add_argument(
+        "--trace-dir",
+        default=os.environ.get("PYDANTIC_SQUADS_TRACE_DIR"),
+        help="record each cycle's trace here (needed by /resume)",
+    )
+    chat_parser.add_argument("--request-limit", type=int, default=None, help="model requests allowed per agent run")
+    chat_parser.add_argument("--skills", action="store_true", help="give the roles the library's own skills")
+    chat_parser.add_argument(
+        "--skills-dir", action="append", default=[], metavar="DIR", help="a folder of more skills; repeatable"
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "chat":
+        return _chat(args)
 
     try:
         report = build_report(
@@ -219,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print_report(report)
     except ImportError:
-        print("pydantic-squads trace needs: pip install 'pydantic-squads[ai,observability]'", file=sys.stderr)
+        print(f"pydantic-squads trace needs: {_EXTRAS_HINT}", file=sys.stderr)
         return 1
     except (FileNotFoundError, ValueError) as exc:
         print(f"pydantic-squads trace: {exc}", file=sys.stderr)

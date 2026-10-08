@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime, timezone
 
 import pytest
@@ -5,7 +6,7 @@ import pytest
 pytest.importorskip("pydantic_ai", reason="requires the 'ai' extra: uv sync --extra ai")
 pytest.importorskip("rich", reason="requires the 'observability' extra: uv sync --extra observability")
 
-from pydantic_squads.cli import build_report, main, print_report
+from pydantic_squads.cli import build_report, main, print_report, role_models
 from pydantic_squads.product.contracts import Span
 from pydantic_squads.product.observability import CycleRecorder
 
@@ -265,3 +266,86 @@ def test_main_trace_reports_missing_extras_as_a_friendly_error(tmp_path, capsys,
 
     assert exit_code == 1
     assert "pip install" in capsys.readouterr().err
+
+
+# -- pydantic-squads chat (ADR 0017) -----------------------------------------
+
+
+def test_role_models_layers_base_shorthands_and_pairs():
+    """role_models starts from the base, applies the PM and HX shorthands, and lets a ROLE=MODEL pair win"""
+    committee = ("growth_pm", "pm_product")
+    assert role_models(None, None, [], committee) == {}
+    assert role_models("opus", "haiku", ["growth_pm = sonnet"], committee, {"designer": "base"}) == {
+        "designer": "base",
+        "growth_pm": "sonnet",
+        "pm_product": "opus",
+        "hx": "haiku",
+    }
+
+
+def _chat_without_input(monkeypatch):
+    """Make the session's prompt hit the end of input at once, as an empty stdin would."""
+
+    def no_input(self, *args, **kwargs):
+        raise EOFError
+
+    monkeypatch.setattr("rich.console.Console.input", no_input)
+
+
+def test_main_chat_runs_a_session_on_the_given_model(tmp_path, capsys, monkeypatch):
+    """main(['chat', vault, --model ...]) builds the squad on that model for every role and runs the session"""
+    _chat_without_input(monkeypatch)
+    context = tmp_path / "product.md"
+    context.write_text("A B2B tool")
+    exit_code = main(["chat", str(tmp_path), "--model", "test", "--context", str(context), "--request-limit", "5"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Model: test\n" in out and "Nothing has run yet." in out
+
+
+def test_main_chat_defaults_to_the_recommended_setup(tmp_path, capsys, monkeypatch):
+    """With no --model, chat uses the recommended Claude Code models, and options adjust single roles"""
+    _chat_without_input(monkeypatch)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/claude")
+    exit_code = main(["chat", str(tmp_path), "--hx-model", "claude-code:sonnet", "--skills"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert exit_code == 0
+    assert "Model: claude-code:sonnet (except growth_pm on claude-code:sonnet:high" in out
+    assert "hx on claude-code:sonnet)" in out
+
+
+def test_main_chat_takes_extra_skill_folders(tmp_path, capsys, monkeypatch):
+    """--skills-dir turns skills on with that folder added"""
+    _chat_without_input(monkeypatch)
+    exit_code = main(["chat", str(tmp_path), "--model", "test", "--skills-dir", str(tmp_path)])
+    assert exit_code == 0
+
+
+def test_main_chat_needs_a_vault_folder(tmp_path, capsys):
+    """chat on a path that is not a folder reports it and returns 1"""
+    exit_code = main(["chat", str(tmp_path / "missing"), "--model", "test"])
+    assert exit_code == 1
+    assert "is not a folder of notes" in capsys.readouterr().err
+
+
+def test_main_chat_needs_claude_code_for_a_claude_code_model(tmp_path, capsys, monkeypatch):
+    """chat with a claude-code model and no `claude` on the PATH says how to fix it and returns 1"""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    exit_code = main(["chat", str(tmp_path)])
+    assert exit_code == 1
+    assert "Claude Code was not found" in capsys.readouterr().err
+
+
+def test_main_chat_rejects_a_model_for_an_unknown_role(tmp_path, capsys):
+    """--role-model naming a role the squad does not have reports it and returns 1"""
+    exit_code = main(["chat", str(tmp_path), "--model", "test", "--role-model", "orchestrator=test"])
+    assert exit_code == 1
+    assert "orchestrator" in capsys.readouterr().err
+
+
+def test_main_chat_reports_missing_extras_as_a_friendly_error(tmp_path, capsys, monkeypatch):
+    """chat prints an install hint, not a traceback, when an extra is missing"""
+    monkeypatch.setitem(sys.modules, "pydantic_squads.product.chat", None)
+    exit_code = main(["chat", str(tmp_path), "--model", "test"])
+    assert exit_code == 1
+    assert "pydantic-squads[ai,observability]" in capsys.readouterr().err

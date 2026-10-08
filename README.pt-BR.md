@@ -148,27 +148,48 @@ if isinstance(resultado, BriefRejection):
 
 `squad.review("...")` leva um pedido direto ao comitê, sem conversa antes.
 
-### Testando a partir de um clone
+### Conversando pelo terminal
 
-O `examples/committee_chat.py` é esse fluxo inteiro como uma sessão de
-terminal, com um modelo de verdade. Você precisa do
-[uv](https://docs.astral.sh/uv/), do [Claude Code](https://code.claude.com)
-instalado e logado (`claude`, depois `/login`), e de uma pasta de notas
-markdown para servir de base de conhecimento:
+O `pydantic-squads chat` é esse fluxo inteiro como uma sessão de terminal,
+com um modelo de verdade e sem escrever código. Você precisa do
+[Claude Code](https://code.claude.com) instalado e logado (`claude`, depois
+`/login`) e de uma pasta de notas markdown para servir de base de
+conhecimento:
 
 ```bash
-git clone https://github.com/dansaletti/pydantic-squads && cd pydantic-squads
-uv run --extra ai python examples/committee_chat.py CAMINHO/DO/VAULT \
+pip install "pydantic-squads[ai,observability] @ git+https://github.com/dansaletti/pydantic-squads"
+pydantic-squads chat CAMINHO/DO/VAULT \
   --context "O que é o seu produto e para quem" \
   --language pt-BR \
   --trace-dir ./traces
 ```
 
-Digite o seu pedido, depois `/close` para levá-lo ao comitê, `/approve`,
-`/submit`, e `/gantt` para ver a rodada e quanto ela custou. Sem opção de
-modelo, ele roda a [configuração recomendada](#configuração-recomendada) no
-seu login do Claude Code, o que consome os limites do seu plano. `--model`
-aceita qualquer string de modelo do Pydantic AI, para rodar com API key.
+A partir de um clone deste repo, com o [uv](https://docs.astral.sh/uv/):
+`uv run --extra ai --extra observability pydantic-squads chat CAMINHO/DO/VAULT`.
+
+Digite o seu pedido e depois:
+
+| Comando | O que faz |
+| --- | --- |
+| `/close` | Fecha a conversa e leva o pedido ao comitê |
+| `/review TEXTO` | Leva TEXTO direto ao comitê, sem conversa |
+| `/approve [NOTAS]`, `/adjust NOTAS`, `/reject MOTIVO` | A sua decisão sobre a síntese |
+| `/submit` | Entrega o Brief aprovado ao Product Owner |
+| `/content`, `/design` | Pede o conteúdo ao Social Media, ou o protótipo ao Designer |
+| `/gantt`, `/cost` | Desenha o ciclo com o custo, ou mostra só o custo por agente |
+| `/resume CYCLE_ID` | Continua uma conversa anterior (precisa de `--trace-dir`) |
+| `/help`, `/quit` | A lista de comandos; sair, mostrando o custo |
+
+Os comandos são em inglês; `--language pt-BR` faz os agentes responderem em
+português. Uma escrita que precisa da sua aprovação é mostrada e espera o
+seu sim ou não. Sem opção de modelo, a sessão roda a
+[configuração recomendada](#configuração-recomendada) no seu login do
+Claude Code, o que consome os limites do seu plano. `--model` aceita
+qualquer string de modelo do Pydantic AI, para rodar com API key;
+`--pm-model`, `--hx-model` e `--role-model PAPEL=MODELO` mudam papéis
+isolados. `--context` também aceita o caminho de um arquivo, e `--skills`
+dá aos papéis as skills da biblioteca. Veja a
+[ADR 0017](docs/adr/0017-chat-command.md).
 
 O que sustenta isso, por código e não por prompt:
 
@@ -225,7 +246,7 @@ mapeia o id de um papel para o modelo dele, e todo papel não citado usa
 ([ADR 0016](docs/adr/0016-shared-evidence-brevity-and-a-model-per-role.md)).
 
 A biblioteca traz uma configuração testada para o Claude Code como preset.
-É a que o exemplo usa por padrão:
+É a que o `pydantic-squads chat` usa por padrão:
 
 ```python
 from pydantic_squads.product.claude_code import RECOMMENDED_MODEL, RECOMMENDED_ROLE_MODELS
@@ -502,7 +523,8 @@ O [pydantic-team](https://github.com/Etiqa/pydantic-team) oferece padrões de ti
 uv sync  # adicione --extra ai para tests/test_product_assembly.py, tests/test_product_committee.py,
          # tests/test_product_marketing.py e tests/test_product_observability.py,
          # --extra skills para tests/test_product_skills.py,
-         # --extra observability para tests/test_cli.py, --extra otel para tests/test_product_otel.py
+         # --extra observability para tests/test_cli.py e tests/test_product_chat.py,
+         # --extra otel para tests/test_product_otel.py
 uv run pytest
 uv run pytest --cov=pydantic_squads --cov-report=term-missing  # a cobertura fica em 100%
 ```
