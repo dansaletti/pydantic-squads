@@ -5,6 +5,7 @@ this protocol, they do not assume a markdown backend.
 """
 
 import re
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Protocol, runtime_checkable
 
@@ -26,6 +27,48 @@ class Note(BaseModel):
     def tags(self) -> list[str]:
         tags = self.frontmatter.get("tags", [])
         return tags if isinstance(tags, list) else [tags]
+
+
+class NoteExcerpt(BaseModel):
+    """A note as a search result: where it is and the parts that matched, not the whole note."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    tags: list[str] = Field(default_factory=list)
+    size: int  # characters in the whole note, so a reader knows what reading it costs
+    excerpts: list[str] = Field(default_factory=list)
+
+
+def _terms(query: str) -> set[str]:
+    """The words of `query` worth matching: words of two letters or less (`de`, `a`, `of`) are ignored."""
+    return {term for term in re.findall(r"\w+", query.lower()) if len(term) > 2}
+
+
+def excerpt(note: Note, query: str = "", *, width: int = 240, limit: int = 2) -> NoteExcerpt:
+    """`note` cut down to at most `limit` excerpts of about `width` characters around what `query` matched.
+
+    The whole query is looked for first, then each of its words. When
+    nothing matches in the content (the match was in the path, or there is
+    no query), the excerpt is the beginning of the note. Whitespace is
+    collapsed and a cut is marked with `…`.
+    """
+    content = note.content
+    lowered = content.lower()
+    needle = query.lower().strip()
+    found = [lowered.find(target) for target in ([needle] if needle else []) + sorted(_terms(query))]
+    windows: list[tuple[int, int]] = []
+    for position in [p for p in found if p >= 0] or [0]:
+        if len(windows) == limit or any(start <= position < end for start, end in windows):
+            continue
+        start = max(0, position - width // 3)
+        windows.append((start, min(len(content), start + width)))
+    excerpts = []
+    for start, end in sorted(windows):
+        text = " ".join(content[start:end].split())
+        if text:
+            excerpts.append(("…" if start > 0 else "") + text + ("…" if end < len(content) else ""))
+    return NoteExcerpt(path=note.path, tags=note.tags, size=len(content), excerpts=excerpts)
 
 
 @runtime_checkable
@@ -90,7 +133,7 @@ class MarkdownKnowledgeBase:
         of two letters or less (`de`, `a`, `of`) are ignored.
         """
         needle = query.lower().strip()
-        terms = {term for term in re.findall(r"\w+", needle) if len(term) > 2}
+        terms = _terms(query)
         scored: list[tuple[int, Note]] = []
         for note in self._all_notes():
             haystack = f"{note.path}\n{note.content}".lower()
@@ -125,6 +168,39 @@ class MarkdownKnowledgeBase:
                 continue  # skip notes that can't be read: a directory, a
                 # broken symlink, or one whose target escapes the vault root
         return notes
+
+
+class SerializedKnowledgeBase:
+    """A `KnowledgeBase` whose writes go through a single writer, one at a time.
+
+    Reads pass straight through, so any number of agents can query the
+    knowledge base in parallel; `write` holds a lock, so two of them never
+    write at once (ADR 0010). The lock is a thread lock, not an asyncio one:
+    the squad's note tools are plain functions, which run in worker threads.
+    Like every knowledge base, it has no delete operation.
+    """
+
+    def __init__(self, kb: KnowledgeBase) -> None:
+        self._kb = kb
+        self._write_lock = threading.Lock()
+
+    @classmethod
+    def wrap(cls, kb: KnowledgeBase) -> "SerializedKnowledgeBase":
+        """`kb` behind a single writer; one that already is comes back unchanged."""
+        return kb if isinstance(kb, cls) else cls(kb)
+
+    def search(self, query: str) -> list[Note]:
+        return self._kb.search(query)
+
+    def read(self, path: str) -> Note:
+        return self._kb.read(path)
+
+    def list_by_tag(self, tag: str) -> list[Note]:
+        return self._kb.list_by_tag(tag)
+
+    def write(self, path: str, content: str) -> None:
+        with self._write_lock:
+            self._kb.write(path, content)
 
 
 def format_note(frontmatter: dict[str, str | list[str]], content: str) -> str:

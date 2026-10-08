@@ -2,7 +2,7 @@
 
 ## marketingskills (MIT)
 
-The Growth PM's marketing skills come from
+The marketing skills of the Growth PM, the Marketing PM and Social Media come from
 [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills),
 commit `0baf720ab0c3793aa46beb4b7a7d331d51bf7a00`:
 
@@ -14,7 +14,8 @@ Only `SKILL.md` and `references/` were copied (not `evals/`). They were
 adapted to this runtime: references to `.agents/product-marketing.md` point
 to the squad's product context and the knowledge-base note
 `docs/product-marketing.md`, and links to the upstream `tools/` registry
-were removed.
+were removed, and `product-marketing` hands its draft over when the role
+running it cannot write notes.
 
 ```
 MIT License

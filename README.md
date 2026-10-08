@@ -8,7 +8,7 @@ Declarative, validated agent squads on top of [Pydantic AI](https://ai.pydantic.
 
 Most multi-agent frameworks focus on how agents *run*. `pydantic-squads` focuses on how a squad is *defined*: who each agent is, what it must not do, who it talks to, what it may write, and what it hands off to whom. Definitions are plain Pydantic models, so they are validated at construction time and testable without calling an LLM.
 
-It also ships a ready-made [product squad](#product-squad) that runs end to end on Pydantic AI: from a conversation with the founder to a bet, a backlog of stories, and a clickable HTML prototype.
+It also ships a ready-made [product squad](#product-squad) that runs end to end on Pydantic AI: from a conversation with a neutral Facilitator, through a committee of PMs and one human decision, to a backlog of stories, a clickable HTML prototype and launch content.
 
 ## Installation
 
@@ -68,37 +68,43 @@ squad = Squad(name="Produto", roles=[...], template=PT_BR)
 
 ## Product squad
 
-`pydantic_squads.product` ships a ready-made squad — Growth PM, HX
-researcher, Product Owner, Designer — with typed hand-off contracts (see
-ADR 0003). The flow is conversation → `Bet` → `Backlog` → `Prototype`.
-Consuming projects supply only a knowledge base; roles and contracts are
-fixed.
+`pydantic_squads.product` ships a ready-made squad with typed hand-off
+contracts (see ADR 0003 and [ADR 0013](docs/adr/0013-pm-committee-with-a-single-human-gate.md)). Consuming projects supply
+only a knowledge base; roles and contracts are fixed.
+
+New to the project? [docs/architecture.md](docs/architecture.md) walks
+through the flow, each role's boundaries and why it is built this way.
+
+| Role | What it does |
+| --- | --- |
+| Facilitator | The only role that talks to you. Makes the request clear, picks the PMs to hear, and consolidates what they say. Gives no opinion |
+| Growth PM, Product PM, Marketing PM | The committee. Each gives an `Opinion` from its own view: metrics and experiments, journeys and scope, positioning and messaging |
+| HX researcher | A read-only query tool over the knowledge base: cited findings, each classified as evidence, assumption or gap |
+| Product Owner | Turns an approved `Brief` into a `Backlog`. Takes nothing else |
+| Designer | Turns the stories that need design into an HTML `Prototype` |
+| Social Media | Turns the same `Brief` into a `ContentPack`, under the Marketing PM |
+
+The flow is conversation → `Triage` → `Opinion`s in parallel → `Synthesis`
+→ your decision → `Brief` → `Backlog` → `Prototype`, and the same `Brief` →
+`ContentPack`.
 
 ```python
 from pydantic_squads.product import build_product_squad
 
 squad = build_product_squad(language="en")  # or "pt-BR"
-print(squad.instructions_for("growth_pm"))
+print(squad.instructions_for("facilitator"))
 ```
 
 ### Running it (the `ai` extra)
 
 The `ai` extra (see [Installation](#installation); backed by
 [pydantic-ai-slim](https://ai.pydantic.dev), not the full `pydantic-ai`
-package) assembles the squad into real agents:
-`ProductSquad` talks to the Growth PM, which can consult HX (cited findings,
-validated against the knowledge base) and write notes within its
-`Permissions`. A write to a `write_with_approval` path pauses the run and
-hands you back a `DeferredToolRequests` instead of crashing, so a human
-decides before anything is written. HX itself cannot request approval — see
-[ADR 0004](docs/adr/0004-hx-cannot-request-write-approval.md). Pass
-`language="pt-BR"` to get the instruction labels in Portuguese (default
-`"en"`).
+package) assembles the squad into real agents.
 
 ```python
 from pydantic_ai import DeferredToolRequests
 
-from pydantic_squads.product import MarkdownKnowledgeBase, Revision
+from pydantic_squads.product import BriefRejection, MarkdownKnowledgeBase
 from pydantic_squads.product.assembly import ProductSquad
 
 kb = MarkdownKnowledgeBase("./vault")  # a folder of Obsidian-style .md notes
@@ -108,36 +114,144 @@ squad = ProductSquad(
     context="B2B tool for small logistics companies. Primary persona: dispatch manager.",
 )
 
-reply = squad.chat("Users are dropping off during signup, what do we know?")
-print(reply)  # the Growth PM may consult HX before answering
+# 1. Talk to the Facilitator until the request is clear. It may consult HX.
+reply = squad.chat("I want a fake-door landing page for route sharing")
+print(reply)
 
-# Once the conversation has enough to work with:
-bet = squad.close_bet()
-if isinstance(bet, DeferredToolRequests):
-    ...  # resolve bet.approvals, then squad.close_bet(deferred_tool_results=...)
+# 2. Close the conversation. The Facilitator triages it, the PMs it picks
+#    give their opinions in parallel, and you get a Synthesis back.
+synthesis = squad.close_request()
+if isinstance(synthesis, DeferredToolRequests):
+    ...  # resolve it, then squad.close_request(deferred_tool_results=...)
 
-# A human reviews `bet` outside this library. Only pass it on once approved:
-outcome = squad.submit_bet(bet)
+print(synthesis.summary)
+for divergence in synthesis.divergences:  # where the PMs disagree, position by position
+    print(divergence.topic, divergence.positions)
+for gap in synthesis.gaps:  # what HX said the knowledge base does not know
+    print(gap.gap, gap.questions, gap.asked_by)
+for opinion in synthesis.opinions:  # each PM's opinion, whole
+    print(opinion.role, opinion.confidence, opinion.recommendation)
+print(synthesis.proposed_brief)
 
-# If the Product Owner sends it back, the Growth PM revises it and submit_bet
-# returns a Revision (the new Bet plus the PO's SendBack) instead of
-# resubmitting automatically — a human sees why, then approves the revision
-# before it reaches the Product Owner.
-while isinstance(outcome, Revision):
-    print(outcome.send_back.reason, outcome.send_back.questions)
-    ...  # a human reviews outcome.bet before resubmitting it
-    outcome = squad.submit_bet(outcome.bet)
+# 3. Decide, once. Pick one:
+synthesis = squad.adjust("Make the metric a conversion rate")  # redo the synthesis only
+brief = squad.approve("Go ahead")  # the proposed brief, with your decision stamped on it
+# squad.reject("Not this quarter")  # ends the request, no brief
 
-# outcome is now a Backlog (or a DeferredToolRequests, if the revision itself
-# needed write approval).
+# 4. Only an approved Brief reaches the Product Owner.
+outcome = squad.submit_brief(brief)
+if isinstance(outcome, BriefRejection):
+    print(outcome.missing_fields, outcome.reason)
+# Otherwise outcome is a Backlog.
 ```
+
+`squad.review("...")` takes a request to the committee directly, with no
+conversation before it.
+
+### Trying it from a clone
+
+`examples/committee_chat.py` is this whole flow as a terminal session, on a
+real model. You need [uv](https://docs.astral.sh/uv/),
+[Claude Code](https://code.claude.com) installed and logged in (`claude`,
+then `/login`), and a folder of markdown notes to use as the knowledge base:
+
+```bash
+git clone https://github.com/dansaletti/pydantic-squads && cd pydantic-squads
+uv run --extra ai python examples/committee_chat.py PATH/TO/VAULT \
+  --context "What your product is and who it is for" \
+  --trace-dir ./traces
+```
+
+Type your request, then `/close` to take it to the committee, `/approve`,
+`/submit`, and `/gantt` to see the round and what it cost. With no model
+option it runs the [recommended setup](#recommended-setup) on your Claude
+Code login, which counts against your plan's limits. `--model` takes any
+Pydantic AI model string instead, to run on an API key.
+
+What holds this together, by code and not by prompt:
+
+- **The Facilitator is neutral.** Its conversational agent has no tool
+  that reaches a PM, the agent that writes the synthesis has no tool at
+  all, and a `Synthesis` has no field for a recommendation of its own.
+- **The PMs do not debate.** Each gives its opinion in a run of its own,
+  with no message history and no sight of the others. The role on an
+  opinion is stamped by the runtime, and a source that is not a note in
+  the knowledge base is refused.
+- **At most one rebuttal.** If the first synthesis finds divergences, the
+  PMs cited in them reply once and the synthesis is redone. What still
+  diverges stays visible. There is no loop.
+- **You see the raw material.** The synthesis carries the original
+  opinions whole, the replies, and every gap HX reported with the question
+  that surfaced it. The Facilitator groups gaps that say the same thing,
+  and code makes sure none is dropped; `synthesis.raw_gaps` has them in
+  HX's words. It is also written to
+  `squad/committee/<cycle_id>/synthesis-<n>.md`.
+- **The decision is data.** `approve()` calls no model: it stamps a
+  `HumanDecision` and writes the `Brief` to `squad/briefs/<brief_id>.md`.
+  A brief with a field missing, or without an approved decision, is
+  rejected before the Product Owner's model is called
+  ([ADR 0011](docs/adr/0011-brief-is-the-product-owners-only-door.md)).
+- **HX is a read-only query tool.** Every `consult_hx` call is a fresh run
+  with no memory of the previous one, and it never writes
+  ([ADR 0010](docs/adr/0010-hx-is-a-read-only-query-tool.md)).
+  `ProductSquad` wraps the knowledge base you give it in a
+  `SerializedKnowledgeBase`, so writes happen one at a time.
+
+The Facilitator can write to `docs/**` and `assumptions/**` with your
+approval. Such a write pauses the run and hands you back a
+`DeferredToolRequests` instead of crashing, so you decide before anything
+is written; pass its resolution back as `deferred_tool_results` on the same
+method. After `approve()` or `reject()`, the next `chat()` starts a new
+request, with a new `cycle_id`. Pass `language="pt-BR"` to get the
+instruction labels in Portuguese (default `"en"`).
+
+A request heard by three PMs costs a triage, three opinions (each with its
+own HX consultations) and a synthesis, plus one more round when they
+diverge. `usage_limits` caps every run. To keep each call small, searching
+the knowledge base returns excerpts of the best matches and a role reads
+the notes it needs
+([ADR 0015](docs/adr/0015-search-returns-excerpts.md)). What HX already
+answered the Facilitator is handed to the PMs, so the same question is not
+put to HX once per PM.
+
+#### Recommended setup
+
+There is no configuration file: the squad is configured by the arguments
+of `ProductSquad`. Roles can run on different models. `models` maps a role
+id to its model, and every role not named uses `model`
+([ADR 0016](docs/adr/0016-shared-evidence-brevity-and-a-model-per-role.md)).
+
+The library ships one tested setup for Claude Code as a preset. It is what
+the example uses by default:
+
+```python
+from pydantic_squads.product.claude_code import RECOMMENDED_MODEL, RECOMMENDED_ROLE_MODELS
+
+squad = ProductSquad(
+    kb,
+    model=RECOMMENDED_MODEL,  # "claude-code:sonnet": Facilitator, Product Owner, Designer, Social Media
+    models=RECOMMENDED_ROLE_MODELS,  # PMs on "claude-code:sonnet:high", HX on "claude-code:haiku"
+    context="...",
+)
+```
+
+The PMs, which judge, run on Sonnet with extended thinking; HX, which
+retrieves and classifies, on Haiku. On one real vault, the same kind of
+request went from an estimated US$ 4.74 before any of this to US$ 0.64 with
+this setup, from the conversation to the backlog. It is a preset, not a
+default: `ProductSquad(kb, model=...)` alone runs every role on one model.
+To change one role, pass your own mapping, for example
+`models={**RECOMMENDED_ROLE_MODELS, "hx": "claude-code:sonnet"}`.
 
 ### Running on your Claude Code login (no API key)
 
 If you have [Claude Code](https://code.claude.com) installed and logged in
 (`claude`, then `/login`), the squad can run on that login instead of an API
 key: pass `model="claude-code"` (Claude Code's default model) or
-`model="claude-code:sonnet"` / `"claude-code:opus"`. Every agent request
+`model="claude-code:sonnet"` / `"claude-code:opus"`. A third part sets the
+reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`):
+`"claude-code:sonnet:high"` is Sonnet with extended thinking, which reasons
+longer and costs more output tokens. Every agent request
 becomes a tool-less `claude -p` call; the squad's tools, permissions,
 approvals and validators still run in Python, unchanged (ADR 0008).
 
@@ -174,7 +288,8 @@ something your subscription is charged.
 The Product Owner marks each story `needs_design` (required, no default).
 `design()` hands the backlog to the Designer, which turns every story that
 needs design into a self-contained, mobile-first HTML prototype in
-`squad/design/<cycle_id>/`, consulting HX about users along the way. A
+`squad/design/<cycle_id>/`, consulting HX about users and the Marketing PM
+about brand along the way. A
 deterministic gate checks that every such story is on some screen before
 the prototype is accepted. See
 [ADR 0007](docs/adr/0007-designer-role.md).
@@ -192,24 +307,49 @@ if isinstance(result, Prototype):
     print(result.html_path)  # open it in a browser
     for q in result.founder_questions:  # also in questions.md, next to the HTML
         print(q.question, "— default:", q.suggested_default)
-    # Brand, tone and positioning are yours to decide: keys are the questions'
-    # text, and unanswered ones keep the Designer's suggested default.
+    # What reaches you is what the squad could not answer: an HX gap, or a
+    # brand question the Marketing PM found nothing about in the knowledge
+    # base. Keys are the questions' text, and unanswered ones keep the
+    # Designer's suggested default.
     result = squad.design(outcome, answers={"Which tone?": "Friendly, informal"})
 ```
 
 A story too ambiguous to design comes back as a `SendBack`, to you, not
 automatically to the Product Owner.
 
+### Writing the content
+
+The Marketing PM owns positioning, tone, brand and naming. Other roles ask
+it through `consult_pm_marketing`, and it answers from the knowledge base,
+with sources, or says the knowledge base does not settle the question. Only
+then does a brand question reach you. Social Media works under it:
+`produce_content()` takes the same approved `Brief` and writes landing-page
+copy and posts to `squad/content/<cycle_id>/`. See
+[ADR 0012](docs/adr/0012-marketing-pm-owns-brand-and-social-media-executes.md).
+
+```python
+from pydantic_squads.product import ContentPack
+
+pack = squad.produce_content(brief)  # a BriefRejection if the brief is not approved
+if isinstance(pack, ContentPack):
+    for piece in pack.pieces:
+        print(piece.kind, piece.channel, piece.path)  # files in the knowledge base
+    print(pack.open_questions)  # brand questions nobody could answer
+```
+
+Nothing is published: reviewing and posting the content is yours to do.
+
 ### Skills (the `skills` extra)
 
 Each role can load [Agent Skills](https://agentskills.io/home) — `SKILL.md`
 packages with `references/`, `assets/` and `scripts/` — scoped to its own
-`Role.skills`; every role ships one (`prioritization`,
-`evidence-classification`, `user-stories`, `prototyping`), the Product
-Owner also ships `story-mapping`, the Designer ships `impeccable` (adapted
-from [impeccable](https://github.com/pbakaus/impeccable), Apache-2.0), the Growth PM
-also ships twelve growth-marketing skills from
-[marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
+`Role.skills`; every role but the Facilitator ships one (`prioritization`, `story-mapping`,
+`evidence-classification`, `user-stories`, `prototyping`, `social`), the
+Product Owner also ships `story-mapping`, the Designer ships `impeccable` (adapted
+from [impeccable](https://github.com/pbakaus/impeccable), Apache-2.0), the Growth PM,
+the Marketing PM and Social Media share twelve growth-marketing skills from
+[marketingskills](https://github.com/coreyhaines31/marketingskills) (eight,
+three and one; MIT,
 see `src/pydantic_squads/product/skills/THIRD_PARTY_NOTICE.md`), and a
 project can add its own. The `skills` extra pulls in
 [pydantic-ai-skills](https://github.com/dougtrajano/pydantic-ai-skills),
@@ -236,14 +376,16 @@ always free.
 ## Observability
 
 See [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). A cycle
-is one conversation → `Bet` → `Backlog` → `Prototype` arc. Pass `trace_dir` to
+is one request: the conversation, the committee's round, the decision, and
+the backlog, prototype and content made from the brief. Pass `trace_dir` to
 `ProductSquad` to record every call as spans (agent, model/tool calls,
 tokens, real cost, status) into `{trace_dir}/{cycle_id}.jsonl`, one
 append-only file per cycle — including HX's own spans, nested under the
-Growth PM's `consult_hx` tool span. A stable `cycle_id` is generated either
-way, since it's also written into the frontmatter of every closed `Bet`'s
-note (`squad/bets/<bet_version_id>.md`, alongside `schema_version` and, on
-a revision, `previous_bet_version_id`).
+`consult_hx` tool span of the role that consulted it, and a
+`human_decision` span for your approval or rejection. A stable `cycle_id`
+is generated either way, since it's also written into the frontmatter of
+the synthesis notes (`squad/committee/<cycle_id>/`) and of the brief note
+(`squad/briefs/<brief_id>.md`).
 
 ```python
 from pydantic_ai import UsageLimits
@@ -259,7 +401,7 @@ squad = ProductSquad(
 
 Reload a past conversation and keep going with `chat()`. The `cycle_id` is
 the name of its trace file (`{trace_dir}/<cycle_id>.jsonl`), and it is also
-in the frontmatter of the cycle's Bet notes. Read the current one from
+in the frontmatter of the cycle's synthesis and brief notes. Read the current one from
 `squad.cycle_id` (`None` until the first call starts a cycle):
 
 ```python
@@ -267,6 +409,17 @@ squad = ProductSquad(kb, model="openai:gpt-4o", context="...", trace_dir="./trac
 squad.resume(cycle_id)
 squad.chat("...")
 ```
+
+`resume()` restores the Facilitator's conversation. A synthesis that was
+waiting for your decision is not restored: call `close_request()` again.
+Its notes from before are still in the knowledge base.
+
+A committee round is recorded as one `request` span with its steps under it
+(`triage`, `fan_out`, `synthesis`, and `rebuttal` when the PMs diverge),
+each agent run inside its step. `squad.gantt().print()` draws the current
+cycle as a [terminal Gantt chart](docs/gantt_visualization.md) straight
+from memory, with or without `trace_dir`: the PMs' opinions show as
+overlapping bars under `fan_out`. See [ADR 0014](docs/adr/0014-request-steps-in-the-trace-and-a-live-gantt.md).
 
 ### Local trace viewer (the `observability` extra)
 
@@ -278,7 +431,8 @@ pydantic-squads trace <cycle_id> --trace-dir ./traces --budget-tokens 20000
 
 It prints a per-span timeline, per-agent duration/tokens/cost, and flags:
 slow spans, HX retries caused by a source that doesn't exist in the
-knowledge base, Product Owner send-backs, pending human approvals, and
+knowledge base, brief rejections, Designer send-backs, pending human
+approvals, and
 input tokens over `--budget-tokens` (checked both per cycle and per span).
 `--trace-dir` defaults to `$PYDANTIC_SQUADS_TRACE_DIR`, or `traces`;
 `--slow-threshold-ms` sets what counts as slow (default 5000).
@@ -300,6 +454,34 @@ enable_otel(send_to_logfire=True)  # or False, to export to your own OTel collec
 > access it first. It's independent of the local JSONL/CLI trace above,
 > which never leaves the local machine.
 
+## Migrating
+
+The API still changes between versions, with no compatibility aliases.
+Each breaking change is listed here.
+
+### 0.1 → 0.2
+
+| Before | After |
+| --- | --- |
+| HX had `write_note` and could write under `squad/hx/**` | HX is read-only ([ADR 0010](docs/adr/0010-hx-is-a-read-only-query-tool.md)). Existing notes under `squad/hx/` stay readable; HX reports what it would have noted as findings in its `HXAnswer` |
+| `squad.chat()` talked to the Growth PM | It talks to the Facilitator, which gives no opinion ([ADR 0013](docs/adr/0013-pm-committee-with-a-single-human-gate.md)) |
+| `bet = squad.close_bet()` | `synthesis = squad.close_request()`, then `brief = squad.approve()` (or `adjust(notes)` / `reject(reason)`) |
+| `Bet`, `BetRecord` | Removed. The decision artifact is the `Brief`; the PMs' views are `Opinion`s inside the `Synthesis`. `BriefRecord` replaces `BetRecord` |
+| Notes in `squad/bets/<bet_version_id>.md` | `squad/briefs/<brief_id>.md`, plus `squad/committee/<cycle_id>/synthesis-<n>.md` and `decision.md`. Old bet notes stay readable |
+| `squad.submit_bet(bet)` | `squad.submit_brief(brief)`, with the `Brief` that `approve()` returns ([ADR 0011](docs/adr/0011-brief-is-the-product-owners-only-door.md)) |
+| `Revision` (the Growth PM revising a bet the Product Owner sent back) | Removed. `submit_brief()` returns `Backlog \| BriefRejection`; fix the brief and submit it again |
+| The Product Owner's `SendBack` | `BriefRejection(missing_fields, reason)`. `SendBack` is now only the Designer's |
+| `submit_bet()` could return a `DeferredToolRequests` | `submit_brief()` never does |
+| A trace was a flat list of agent runs | A committee round adds a `request` span with step spans under it, all with `agent="squad"`. The file format is the same |
+| `Report.po_send_backs`, "Product Owner send-backs" in `pydantic-squads trace` | `Report.brief_rejections`, "Brief rejections" |
+| `GROWTH_PM` was conversational, wrote notes and talked to the Product Owner | It is a task role that only reads. Approved writes to `docs/**` and `assumptions/**` are the Facilitator's |
+| `HXAnswer.question` was whatever HX wrote | It is the caller's question, word for word |
+| `build_product_squad()` had 4 roles | It has 8, in this order: `facilitator`, `growth_pm`, `pm_product`, `pm_marketing`, `hx`, `product_owner`, `designer`, `social_media`. `Span.agent` accepts the new ids too, and the squad adds the `product_owner_has_one_door` policy |
+| `FounderQuestion(origin="positioning", ...)` | Add `marketing_question`, the question put to the Marketing PM. The Designer asks it before asking you ([ADR 0012](docs/adr/0012-marketing-pm-owns-brand-and-social-media-executes.md)) |
+| The Growth PM had `product-marketing`, `marketing-psychology`, `launch` and `social` | The first three are the Marketing PM's, and `social` is Social Media's |
+| The Designer listed `product_owner` in `talks_to` | It lists `hx` and `pm_marketing` |
+| `ProductSquad(kb).kb is kb` | `ProductSquad(kb).kb` is a `SerializedKnowledgeBase` around `kb`. To share one writer between squads, wrap first with `SerializedKnowledgeBase.wrap(kb)` and pass the wrapper |
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md).
@@ -311,7 +493,8 @@ See [docs/roadmap.md](docs/roadmap.md).
 ## Development
 
 ```bash
-uv sync  # add --extra ai for tests/test_product_assembly.py and tests/test_product_observability.py,
+uv sync  # add --extra ai for tests/test_product_assembly.py, tests/test_product_committee.py,
+         # tests/test_product_marketing.py and tests/test_product_observability.py,
          # --extra skills for tests/test_product_skills.py,
          # --extra observability for tests/test_cli.py, --extra otel for tests/test_product_otel.py
 uv run pytest

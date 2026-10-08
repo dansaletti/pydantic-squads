@@ -2,6 +2,9 @@
 
 Status: accepted
 
+[ADR 0014](0014-request-steps-in-the-trace-and-a-live-gantt.md) adds the chart of a live
+`ProductSquad` run, which this record left open.
+
 ## Context
 
 A squad run is several overlapping agent runs, model calls and tool calls

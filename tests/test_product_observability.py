@@ -77,6 +77,21 @@ def test_extract_spans_computes_real_cost_for_a_recognized_model():
     assert spans[0].detail is None
 
 
+def test_extract_spans_records_the_model_that_answered():
+    """A model_call span carries the model's name, and its tool spans do not"""
+    messages = [
+        ModelResponse(
+            parts=[ToolCallPart("search_notes", {"query": "x"}, tool_call_id="call-1")],
+            model_name="haiku",
+            timestamp=_ts(0),
+        ),
+        ModelRequest(parts=[ToolReturnPart("search_notes", "[]", tool_call_id="call-1")], timestamp=_ts(1)),
+    ]
+    model_span, tool_span = extract_spans(messages, agent="hx")
+    assert model_span.model == "haiku"
+    assert tool_span.model is None
+
+
 def test_extract_spans_uses_the_cost_the_backend_reported():
     """extract_spans takes a cost already on the usage (Claude Code) over a genai-prices lookup"""
     messages = [

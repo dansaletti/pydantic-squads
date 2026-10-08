@@ -1,19 +1,19 @@
 """Derive spans from pydantic_ai messages and persist cycles to JSONL (ADR 0006).
 
-Needs the optional `ai` extra: alongside `assembly.py`, this is the only
-other place in `pydantic_squads.product` that imports `pydantic_ai`
-(ADR 0001). Kept separate from `assembly.py` so the CLI trace viewer can
+Needs the optional `ai` extra: it is one of the few modules in
+`pydantic_squads.product` that import `pydantic_ai` (ADR 0001; AGENTS.md
+lists them). Kept separate from `assembly.py` so the CLI trace viewer can
 depend on it without needing to build any agents.
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -25,9 +25,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from pydantic_squads.product.contracts import CycleHeader, CycleSnapshot, Span
-
-AgentName = Literal["growth_pm", "hx", "product_owner", "designer"]
+from pydantic_squads.product.contracts import AgentName, CycleHeader, CycleSnapshot, HXAnswer, Span
 
 
 @dataclass
@@ -37,10 +35,18 @@ class SpanSink:
     Threaded into `_consult_hx` the same way `ctx.usage` already is
     (ADR 0006): pydantic_ai never puts a nested run's messages into the
     outer run's `all_messages()`, so there is no way to recover HX's spans
-    as children of the Growth PM's `consult_hx` span without this hook.
+    as children of the caller's `consult_hx` span without this hook.
     """
 
     nested_runs: dict[str, tuple[AgentName, list[ModelMessage]]] = field(default_factory=dict)
+    # Every HX answer the run got, in order: where a round's gaps come from (ADR 0013).
+    hx_answers: list[HXAnswer] = field(default_factory=list)
+
+
+# Where the run in progress collects its nested HX runs. A context variable,
+# not a slot shared by every run: runs that overlap each see their own sink,
+# so HX can be consulted in parallel (ADR 0010).
+HX_SINK: contextvars.ContextVar[SpanSink | None] = contextvars.ContextVar("hx_sink", default=None)
 
 
 def _now() -> datetime:
@@ -193,6 +199,7 @@ def extract_spans(
                 cost_usd=cost_usd,
                 status=status,
                 detail=detail or cost_detail,
+                model=message.model_name,
             )
         )
         last_model_span_index = len(spans) - 1
@@ -207,7 +214,7 @@ def extract_spans(
 
 
 def merge_nested_spans(spans: list[Span], sink: SpanSink) -> list[Span]:
-    """Splice HX's spans in as children of each `consult_hx` tool span in `spans`."""
+    """Splice each consulted role's spans in as children of the tool span that consulted it."""
     merged = list(spans)
     for span in spans:
         if span.tool_call_id is None or span.tool_call_id not in sink.nested_runs:

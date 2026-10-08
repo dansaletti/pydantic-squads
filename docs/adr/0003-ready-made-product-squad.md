@@ -1,6 +1,8 @@
 # 0003. Ship a ready-made product squad
 
-Status: accepted
+Status: accepted, partly superseded by [ADR 0011](0011-brief-is-the-product-owners-only-door.md)
+(the Product Owner's send-back loop is replaced by a brief rejection)
+and by [ADR 0013](0013-pm-committee-with-a-single-human-gate.md) (the roles: a Facilitator and a committee of PMs)
 
 ## Context
 

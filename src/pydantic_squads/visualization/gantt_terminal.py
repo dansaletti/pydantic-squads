@@ -12,7 +12,7 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -50,17 +50,27 @@ class TerminalGantt:
         "blue": "\033[94m",
         "magenta": "\033[35m",
         "gray": "\033[90m",
+        "white": "\033[97m",
+        "teal": "\033[36m",
+        "pink": "\033[38;5;213m",
+        "orange": "\033[38;5;208m",
     }
 
     AGENT_COLORS = {
+        "squad": "gray",  # the request and its steps, not an agent
+        "facilitator": "white",
         "growth_pm": "purple",
         "pm_growth": "purple",
+        "pm_product": "teal",
+        "pm_marketing": "pink",
         "nx": "green",
         "hx": "cyan",
         "po": "yellow",
+        "product_owner": "yellow",
         "designer": "blue",
         "design": "blue",
         "social": "magenta",
+        "social_media": "orange",
     }
 
     STATUS_SYMBOLS = {"ok": "✓", "retry": "⟳", "error": "✗", "awaiting_approval": "⏸"}
@@ -110,18 +120,14 @@ class TerminalGantt:
             )
 
     @classmethod
-    def from_jsonl(cls, path: "str | Path", **kwargs: Any) -> "TerminalGantt":
-        """Build a chart from a ``pydantic-squads`` trace file (``Span`` lines, ADR 0006).
+    def from_records(cls, records: Iterable[dict[str, Any]], **kwargs: Any) -> "TerminalGantt":
+        """Build a chart from ``pydantic-squads`` span records (ADR 0006), as dicts.
 
-        Child spans are indented under their parent. Extra kwargs go to the constructor.
+        Each record has ``span_id``, ``parent_span_id``, ``operation``, ``started_at``
+        (ISO 8601), ``duration_ms``, ``agent`` and ``status``. Child spans are indented
+        under their parent. Extra kwargs go to the constructor.
         """
-        records = []
-        for line in Path(path).read_text().splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if row.get("kind") == "Span":
-                records.append(row["data"])
+        records = list(records)
         parents = {r["span_id"]: r.get("parent_span_id") for r in records}
 
         def depth(span_id: str) -> int:
@@ -145,6 +151,15 @@ class TerminalGantt:
                 status=r.get("status", "ok"),
             )
         return gantt
+
+    @classmethod
+    def from_jsonl(cls, path: "str | Path", **kwargs: Any) -> "TerminalGantt":
+        """Build a chart from a ``pydantic-squads`` trace file (``Span`` lines, ADR 0006).
+
+        Child spans are indented under their parent. Extra kwargs go to the constructor.
+        """
+        rows = (json.loads(line) for line in Path(path).read_text().splitlines() if line.strip())
+        return cls.from_records((row["data"] for row in rows if row.get("kind") == "Span"), **kwargs)
 
     def _collapsed(self) -> list[Span]:
         """Spans with idle gaps longer than ``collapse_gaps_ms`` shortened."""
@@ -204,7 +219,8 @@ class TerminalGantt:
         lines = self._render_header(total_duration, bar_width, label_width)
         lines.append("")
 
-        for agent in sorted(spans_by_agent):
+        # "squad" rows (a request and its steps) come first: they are the outline of the rest.
+        for agent in sorted(spans_by_agent, key=lambda name: (name != "squad", name)):
             agent_color = self._get_agent_color(agent)
             lines.append(f" {self._color('bold')}{agent_color}{agent}{self._reset()} ")
             for span in sorted(spans_by_agent[agent], key=lambda s: s.start_ms):

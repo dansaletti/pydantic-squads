@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 import pydantic_squads.product as product_pkg
-from pydantic_squads.product.roles import GROWTH_PM
+from pydantic_squads.product.roles import GROWTH_PM, PM_MARKETING, SOCIAL_MEDIA
 
 SKILLS_DIR = Path(product_pkg.__file__).parent / "skills"
 
@@ -83,10 +83,10 @@ MARKETING_SKILLS = [
 
 
 @pytest.mark.parametrize("name", MARKETING_SKILLS)
-def test_marketing_skill_ships_with_the_growth_pm(name):
-    """Each marketingskills skill ships a SKILL.md naming itself and is declared by the Growth PM"""
+def test_marketing_skill_ships_with_exactly_one_role(name):
+    """Each marketingskills skill ships a SKILL.md naming itself and is declared by exactly one role"""
     assert f"name: {name}" in _skill_md(name)
-    assert name in GROWTH_PM.skills
+    assert sum(name in role.skills for role in (GROWTH_PM, PM_MARKETING, SOCIAL_MEDIA)) == 1
 
 
 @pytest.mark.parametrize("name", MARKETING_SKILLS)

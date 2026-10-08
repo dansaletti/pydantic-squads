@@ -1,6 +1,8 @@
 # 0006. Observability and checkpointing for the product squad
 
-Status: accepted
+Status: accepted, partly superseded by [ADR 0011](0011-brief-is-the-product-owners-only-door.md)
+(`submit_bet()` and its revision note are gone)
+and by [ADR 0013](0013-pm-committee-with-a-single-human-gate.md) (the Bet note is now a brief note, and the snapshot is the Facilitator's conversation)
 
 ## Context
 

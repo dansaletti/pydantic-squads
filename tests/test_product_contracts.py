@@ -1,20 +1,30 @@
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
 from pydantic_squads.product import (
     Backlog,
-    Bet,
+    Brief,
+    BriefDraft,
+    BriefRejection,
     ComponentProposal,
+    ContentPack,
+    ContentPiece,
     Finding,
     FindingKind,
     FounderQuestion,
+    HumanDecision,
     HXAnswer,
+    MarketingGuidance,
+    Opinion,
+    OpinionDraft,
     Prototype,
-    Revision,
     Screen,
     SendBack,
     Story,
     design_coverage_errors,
+    validate_brief,
 )
 
 
@@ -64,31 +74,6 @@ def test_hx_answer_with_findings_is_valid():
     assert len(answer.findings) == 1
 
 
-def test_bet_requires_scope_and_out_of_scope():
-    """A Bet must state both what is in scope and what is out"""
-    with pytest.raises(ValidationError):
-        Bet(
-            hypothesis="Shortening onboarding lifts activation",
-            metric="activation_rate",
-            expected_impact="+5pp",
-            scope=[],
-            out_of_scope=["Payment flow"],
-        )
-
-
-def test_bet_defaults_assumptions_and_evidence_to_empty():
-    """A Bet's assumptions and evidence_used default to an empty list"""
-    bet = Bet(
-        hypothesis="Shortening onboarding lifts activation",
-        metric="activation_rate",
-        expected_impact="+5pp",
-        scope=["Signup wizard"],
-        out_of_scope=["Payment flow"],
-    )
-    assert bet.assumptions == []
-    assert bet.evidence_used == []
-
-
 def test_story_requires_acceptance_criteria():
     """A Story must have at least one acceptance criterion"""
     with pytest.raises(ValidationError):
@@ -119,24 +104,85 @@ def test_send_back_with_questions_is_valid():
     assert send_back.questions == ["Which platforms are in scope?"]
 
 
-def _bet(**overrides) -> Bet:
+def _decision(verdict: str = "approved") -> HumanDecision:
+    return HumanDecision(verdict=verdict, decided_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+
+def _brief_data(**overrides) -> dict:
     defaults = dict(
+        problem="New dispatch managers drop out of the signup wizard",
         hypothesis="Shortening onboarding lifts activation",
-        metric="activation_rate",
-        expected_impact="+5pp",
-        scope=["Signup wizard"],
-        out_of_scope=["Payments"],
+        success_metric="activation_rate +5pp",
+        acceptance_criteria=["The wizard has 3 steps"],
+        owner_roles=["growth_pm"],
+        human_decision=_decision(),
     )
-    return Bet(**{**defaults, **overrides})
+    return {**defaults, **overrides}
 
 
-def test_revision_carries_both_the_new_bet_and_the_send_back():
-    """A Revision pairs the PM's new Bet with the SendBack that prompted it"""
-    send_back = SendBack(reason="Scope is unclear", questions=["Which platforms are in scope?"])
-    bet = _bet()
-    revision = Revision(bet=bet, send_back=send_back)
-    assert revision.bet == bet
-    assert revision.send_back == send_back
+def test_brief_requires_an_approved_human_decision():
+    """A Brief whose human decision is a rejection does not validate"""
+    with pytest.raises(ValidationError, match="approved human decision"):
+        Brief(**_brief_data(human_decision=_decision("rejected")))
+
+
+def test_brief_rejects_blank_text():
+    """A Brief field holding only whitespace counts as empty"""
+    with pytest.raises(ValidationError):
+        Brief(**_brief_data(problem="   "))
+    with pytest.raises(ValidationError):
+        Brief(**_brief_data(acceptance_criteria=[" "]))
+
+
+def test_validate_brief_returns_the_brief_when_complete():
+    """validate_brief returns a Brief for complete data, and a Brief unchanged"""
+    brief = validate_brief(_brief_data())
+    assert isinstance(brief, Brief)
+    assert validate_brief(brief) == brief
+
+
+def test_validate_brief_names_every_missing_field():
+    """validate_brief rejects incomplete data naming each field once, in the brief's order"""
+    rejection = validate_brief({"problem": "p", "acceptance_criteria": ["", ""]})
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == [
+        "hypothesis",
+        "success_metric",
+        "acceptance_criteria",
+        "owner_roles",
+        "human_decision",
+    ]
+    assert "success_metric" in rejection.reason
+
+
+def test_validate_brief_rejects_a_draft_for_its_missing_decision():
+    """A BriefDraft has no human decision, so validate_brief rejects it"""
+    draft = BriefDraft(**{k: v for k, v in _brief_data().items() if k != "human_decision"})
+    rejection = validate_brief(draft)
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == ["human_decision"]
+
+
+def test_validate_brief_rejects_a_decision_that_is_not_an_approval():
+    """validate_brief names human_decision when the human rejected the brief"""
+    rejection = validate_brief(_brief_data(human_decision=_decision("rejected")))
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == ["human_decision"]
+
+
+def test_validate_brief_rejects_data_that_is_not_a_brief_at_all():
+    """validate_brief rejects, without raising, something that is not even a mapping"""
+    rejection = validate_brief("build me a landing page")
+    assert isinstance(rejection, BriefRejection)
+    assert rejection.missing_fields == []
+    assert rejection.reason.startswith("The brief is not ready")
+
+
+def test_brief_rejection_requires_a_reason():
+    """A BriefRejection without a reason is rejected"""
+    with pytest.raises(ValidationError):
+        BriefRejection(missing_fields=["problem"], reason="")
+
 
 
 # -- Designer contracts (ADR 0007) -------------------------------------------
@@ -191,14 +237,60 @@ def test_hx_gap_question_with_hx_question_is_valid():
 
 def test_positioning_question_rejects_an_hx_question():
     """A positioning FounderQuestion never references an HX question"""
-    with pytest.raises(ValidationError, match="must not reference"):
-        FounderQuestion(question="Q?", context="c", origin="positioning", suggested_default="d", hx_question="x")
+    with pytest.raises(ValidationError, match="must not reference an HX question"):
+        FounderQuestion(
+            question="Q?",
+            context="c",
+            origin="positioning",
+            suggested_default="d",
+            hx_question="x",
+            marketing_question="Which tone?",
+        )
 
 
-def test_positioning_question_without_hx_question_is_valid():
-    """A positioning FounderQuestion without an HX question is valid"""
-    q = FounderQuestion(question="Tone?", context="c", origin="positioning", suggested_default="Friendly")
+def test_positioning_question_requires_the_marketing_question():
+    """A positioning FounderQuestion must reference the question put to the PM Marketing"""
+    with pytest.raises(ValidationError, match="question put to the PM Marketing"):
+        FounderQuestion(question="Tone?", context="c", origin="positioning", suggested_default="Friendly")
+
+
+def test_positioning_question_with_marketing_question_is_valid():
+    """A positioning FounderQuestion that references its PM Marketing question is valid"""
+    q = FounderQuestion(
+        question="Tone?", context="c", origin="positioning", suggested_default="Friendly", marketing_question="Which tone?"
+    )
     assert q.hx_question is None
+    assert q.marketing_question == "Which tone?"
+
+
+def test_hx_gap_question_rejects_a_marketing_question():
+    """An hx_gap FounderQuestion never references a PM Marketing question"""
+    with pytest.raises(ValidationError, match="must not reference a PM Marketing question"):
+        FounderQuestion(
+            question="Q?", context="c", origin="hx_gap", suggested_default="d", hx_question="x", marketing_question="y"
+        )
+
+
+def test_answered_marketing_guidance_requires_a_source():
+    """A MarketingGuidance that answers the question must cite the note it comes from"""
+    with pytest.raises(ValidationError, match="requires at least one source"):
+        MarketingGuidance(question="Which tone?", answered=True, guidance="Friendly")
+
+
+def test_unanswered_marketing_guidance_has_no_sources():
+    """A MarketingGuidance that could not answer says what is missing and cites nothing"""
+    with pytest.raises(ValidationError, match="must not have sources"):
+        MarketingGuidance(question="Which tone?", answered=False, guidance="No brand note", sources=["docs/x.md"])
+    guidance = MarketingGuidance(question="Which tone?", answered=False, guidance="No brand note")
+    assert guidance.sources == []
+
+
+def test_content_pack_needs_at_least_one_piece():
+    """A ContentPack with no pieces is rejected, and a piece's kind is one of the known ones"""
+    with pytest.raises(ValidationError):
+        ContentPack(pieces=[])
+    with pytest.raises(ValidationError):
+        ContentPiece(kind="billboard", channel="street", title="t", path="squad/content/c/x.md")
 
 
 def _backlog() -> Backlog:
@@ -232,3 +324,25 @@ def test_coverage_gate_flags_a_screen_citing_an_unknown_story():
     """The coverage gate flags a screen that cites a story missing from the backlog"""
     prototype = Prototype(screens=[_screen(stories=["See progress", "Invented"])], html_path="p.html")
     assert design_coverage_errors(_backlog(), prototype) == ["screen 'Signup' cites unknown story 'Invented'"]
+
+
+def test_opinion_draft_needs_a_recommendation_and_a_known_confidence():
+    """An OpinionDraft without a recommendation, or with a made-up confidence, is rejected"""
+    with pytest.raises(ValidationError):
+        OpinionDraft(recommendation=" ", confidence="high")
+    with pytest.raises(ValidationError):
+        OpinionDraft(recommendation="Ship it", confidence="certain")
+
+
+def test_opinion_draft_has_no_role_for_the_model_to_fill():
+    """The role is not part of what a PM writes: only Opinion carries it"""
+    assert "role" not in OpinionDraft.model_fields
+    opinion = Opinion(role="pm_product", recommendation="Ship it", confidence="low")
+    assert opinion.role == "pm_product"
+    assert opinion.risks == [] and opinion.questions_for_human == [] and opinion.sources == []
+
+
+def test_finding_schema_tells_the_model_a_gap_has_no_sources():
+    """The schema HX fills in says, on the field itself, that a gap's sources are empty"""
+    description = Finding.model_json_schema()["properties"]["sources"]["description"]
+    assert "empty for a gap" in description

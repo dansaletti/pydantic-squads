@@ -66,6 +66,36 @@ def test_build_report_flags_slow_spans(tmp_path):
     assert [s.span_id for s in report.slow_spans] == ["s1"]
 
 
+def test_build_report_lists_the_models_calls_and_retries_of_each_agent(tmp_path):
+    """Per-agent metrics say which models answered, how many calls there were and how many were retried"""
+    spans = [
+        _span(span_id="s1", agent="hx", model="haiku"),
+        _span(span_id="s2", agent="hx", model="haiku", status="retry"),
+        _span(span_id="s3", agent="hx", model="sonnet"),
+        _span(span_id="s4", agent="growth_pm"),  # a trace written before spans had a model
+    ]
+    _record_cycle(tmp_path, "cycle-models", spans)
+
+    report = build_report("cycle-models", tmp_path)
+
+    by_agent = {m.agent: m for m in report.agent_metrics}
+    assert (by_agent["hx"].models, by_agent["hx"].calls, by_agent["hx"].retried) == (["haiku", "sonnet"], 3, 1)
+    assert (by_agent["growth_pm"].models, by_agent["growth_pm"].calls) == ([], 1)
+
+
+def test_build_report_does_not_call_a_request_step_slow(tmp_path):
+    """A "squad" span is a whole step of a request: it is never listed as a slow span"""
+    spans = [
+        _span(span_id="s1", agent="squad", operation="fan_out", duration_ms=60000.0),
+        _span(span_id="s2", agent="pm_product", operation="agent_run", duration_ms=60000.0),
+    ]
+    _record_cycle(tmp_path, "cycle-steps", spans)
+
+    report = build_report("cycle-steps", tmp_path, slow_threshold_ms=5000.0)
+
+    assert [s.span_id for s in report.slow_spans] == ["s2"]
+
+
 def test_build_report_flags_hx_retries_citing_a_missing_source(tmp_path):
     """build_report flags HX retries whose detail cites a missing knowledge-base source"""
     spans = [
@@ -84,32 +114,32 @@ def test_build_report_flags_hx_retries_citing_a_missing_source(tmp_path):
     assert [s.span_id for s in report.hx_retries] == ["s1"]
 
 
-def test_build_report_flags_product_owner_send_backs(tmp_path):
-    """build_report flags Product Owner model calls whose output was a SendBack"""
+def test_build_report_flags_brief_rejections(tmp_path):
+    """build_report flags the spans whose output was a BriefRejection"""
     spans = [
-        _span(span_id="s1", agent="product_owner", output_type="SendBack"),
+        _span(span_id="s1", agent="product_owner", output_type="BriefRejection"),
         _span(span_id="s2", agent="product_owner", output_type="Backlog"),
     ]
     _record_cycle(tmp_path, "cycle-4", spans)
 
     report = build_report("cycle-4", tmp_path)
 
-    assert [s.span_id for s in report.po_send_backs] == ["s1"]
+    assert [s.span_id for s in report.brief_rejections] == ["s1"]
 
 
 def test_build_report_flags_designer_send_backs_separately(tmp_path):
-    """build_report flags Designer SendBacks apart from the Product Owner's"""
+    """build_report flags Designer SendBacks apart from brief rejections"""
     spans = [
         _span(span_id="s1", agent="designer", output_type="SendBack"),
         _span(span_id="s2", agent="designer", output_type="Prototype"),
-        _span(span_id="s3", agent="product_owner", output_type="SendBack"),
+        _span(span_id="s3", agent="product_owner", output_type="BriefRejection"),
     ]
     _record_cycle(tmp_path, "cycle-designer", spans)
 
     report = build_report("cycle-designer", tmp_path)
 
     assert [s.span_id for s in report.designer_send_backs] == ["s1"]
-    assert [s.span_id for s in report.po_send_backs] == ["s3"]
+    assert [s.span_id for s in report.brief_rejections] == ["s3"]
 
 def test_build_report_flags_pending_approvals(tmp_path):
     """build_report flags tool spans still awaiting a human approval"""
@@ -181,7 +211,7 @@ def test_print_report_renders_the_timeline_metrics_and_diagnostics(tmp_path, cap
             status="retry",
             detail="source 'x.md' does not exist in the knowledge base",
         ),
-        _span(span_id="s4", agent="product_owner", output_type="SendBack"),
+        _span(span_id="s4", agent="product_owner", output_type="BriefRejection"),
         _span(
             span_id="s5",
             agent="growth_pm",
@@ -201,6 +231,7 @@ def test_print_report_renders_the_timeline_metrics_and_diagnostics(tmp_path, cap
     assert "Per-agent metrics" in out
     assert "Diagnostics" in out
     assert "exceed budget" in out
+    assert "Brief rejections: 1" in out
     assert "Designer send-backs: 0" in out
 
 
