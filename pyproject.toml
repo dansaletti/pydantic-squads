@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-squads"
-version = "0.2.0"
+version = "0.3.0"
 description = "Declarative, validated agent squads on top of Pydantic AI"
 readme = "README.md"
 license = "MIT"
