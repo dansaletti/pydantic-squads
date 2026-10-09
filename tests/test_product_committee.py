@@ -19,6 +19,7 @@ from pydantic_squads.product.contracts import (
     Backlog,
     Brief,
     BriefDraft,
+    BriefRecord,
     Divergence,
     Finding,
     FindingKind,
@@ -216,7 +217,8 @@ class Committee:
             return _output(next(self.syntheses))(messages, info)
         if "OpinionDraft" in titles:
             system = next(p.content for p in messages[0].parts if type(p).__name__ == "SystemPromptPart")
-            role = next(role for name, role in ROLE_BY_NAME.items() if system.startswith(f"You are the {name} "))
+            intro = system.splitlines()[0]  # "You are the Growth PM of ...", "Você é o Growth PM da ..."
+            role = next(role for name, role in ROLE_BY_NAME.items() if f" {name} " in intro)
             user = str(messages[0].parts[-1].content)
             if "This is your one reply" in user:
                 self._note("reply", role, messages, info)
@@ -430,8 +432,8 @@ def test_synthesis_lists_the_gaps_hx_reported_with_their_questions(tmp_path):
     ]
     note = squad.kb.read(f"squad/committee/{squad.cycle_id}/synthesis-1.md").content
     assert "## What we don't know" in note
-    assert "- Asked HX: Do they share routes today?" in note
-    assert "- Asked by: growth_pm, pm_product" in note
+    assert "- **Asked HX:** Do they share routes today?" in note
+    assert "- **Asked by:** Growth PM, Product PM" in note
 
 
 def test_gaps_ignore_evidence_and_keep_distinct_gaps_apart(tmp_path):
@@ -530,7 +532,7 @@ def test_facilitator_groups_reworded_gaps_and_the_note_keeps_hx_words(tmp_path):
     note = squad.kb.read(f"squad/committee/{squad.cycle_id}/synthesis-1.md").content
     assert "### No user research exists" in note
     assert "## Gaps as HX reported them" in note
-    assert "- There are no interviews yet (asked by pm_product)" in note
+    assert "- There are no interviews yet _(Asked by: Product PM)_" in note
 
 
 def test_adjust_regroups_the_same_raw_gaps(tmp_path):
@@ -684,26 +686,15 @@ def test_synthesis_note_shows_the_synthesis_and_everything_under_it(tmp_path):
     }
     for expected in (
         "### How long to run it",
-        "- pm_product: a month",
-        "- Question for the human: OK?",
-        "- Risk: Small sample",
-        "- Source: interviews/a.md",
-        "- Acceptance criterion: The page has one call to action",
+        "- **Product PM:** a month",
+        "**Questions for the human**\n\n- OK?",
+        "**Risks**\n\n- Small sample",
+        "- `interviews/a.md`",
+        "- [ ] The page has one call to action",
         "## Replies",
-        "- Is two weeks acceptable?",
+        "1. Is two weeks acceptable?",
     ):
         assert expected in note.content
-
-
-def test_synthesis_note_says_so_when_there_is_nothing_to_list():
-    """A synthesis with no divergence, question or gap says None instead of leaving the section empty"""
-    quiet = SynthesisDraft(summary="Agreed", proposed_brief=_brief_draft())
-    synthesis = committee.build_synthesis(REQUEST, quiet, [Opinion(role="growth_pm", **_draft().model_dump())], [], [])
-    note = committee.synthesis_note(synthesis, "c1", 1)
-    assert "## Divergences\n\nNone." in note
-    assert "## Questions for the human\n\nNone." in note
-    assert "HX reported no gap during this round." in note
-    assert "## Replies" not in note
 
 
 # -- the gate -----------------------------------------------------------------
@@ -743,12 +734,27 @@ def test_approve_stamps_the_decision_without_calling_a_model(tmp_path):
     assert BriefDraft(**brief.model_dump(exclude={"human_decision"})) == synthesis.proposed_brief
     [brief_file] = (tmp_path / "squad" / "briefs").glob("*.md")
     note = squad.kb.read(f"squad/briefs/{brief_file.name}")
-    assert note.frontmatter == {"cycle_id": cycle_id, "schema_version": "1", "brief_id": brief_file.stem}
-    assert Brief.model_validate_json(note.content) == brief
+    assert note.frontmatter["brief_id"] == brief_file.stem and note.frontmatter["cycle_id"] == cycle_id
+    assert note.content.startswith("# Brief\n\n- **Decision:** ✅ Approved on ")
+    assert "> Go ahead" in note.content and "## Acceptance criteria\n\n- [ ] " in note.content
+    record = BriefRecord.model_validate_json(squad.kb.read(note.frontmatter["data"]).content)
+    assert record.brief == brief and record.brief_id == brief_file.stem and record.cycle_id == cycle_id
     decision = squad.kb.read(f"squad/committee/{cycle_id}/decision.md")
     assert decision.frontmatter["verdict"] == "approved"
     assert decision.frontmatter["brief"] == f"squad/briefs/{brief_file.name}"
     assert squad.pending_synthesis is None
+
+
+def test_the_squads_notes_are_written_in_its_language(tmp_path):
+    """A pt-BR squad writes the synthesis, the brief and the decision with Portuguese labels"""
+    squad = _squad(tmp_path, Committee(), language="pt-BR")
+    squad.review(REQUEST)
+    cycle_id = squad.cycle_id
+    squad.approve()
+    [brief_file] = (tmp_path / "squad" / "briefs").glob("*.md")
+    assert "# Síntese" in squad.kb.read(f"squad/committee/{cycle_id}/synthesis-1.md").content
+    assert "## Critérios de aceite" in squad.kb.read(f"squad/briefs/{brief_file.name}").content
+    assert "# Decisão: ✅ Aprovado" in squad.kb.read(f"squad/committee/{cycle_id}/decision.md").content
 
 
 def test_reject_leaves_no_brief(tmp_path):

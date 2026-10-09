@@ -210,7 +210,10 @@ O que sustenta isso, por código e não por prompt:
   palavras da HX. Ela também é gravada em
   `squad/committee/<cycle_id>/synthesis-<n>.md`.
 - **A decisão é dado.** `approve()` não chama modelo: carimba uma
-  `HumanDecision` e grava o `Brief` em `squad/briefs/<brief_id>.md`. Um
+  `HumanDecision` e grava o `Brief` em `squad/briefs/<brief_id>.md`,
+  como Markdown para você ler, com o mesmo brief como dado em
+  `<brief_id>.json` ao lado
+  ([ADR 0018](docs/adr/0018-notes-are-markdown-for-people.md)). Um
   brief com campo faltando, ou sem decisão aprovada, é rejeitado antes de
   o modelo do Product Owner ser chamado
   ([ADR 0011](docs/adr/0011-brief-is-the-product-owners-only-door.md)).
@@ -226,7 +229,8 @@ aprovação. Uma escrita dessas pausa a execução e devolve um
 qualquer escrita; passe a resolução como `deferred_tool_results` no mesmo
 método. Depois de `approve()` ou `reject()`, o próximo `chat()` começa um
 pedido novo, com um `cycle_id` novo. Passe `language="pt-BR"` para ter os
-rótulos das instruções em português (padrão `"en"`).
+rótulos das instruções, e as notas que a squad grava, em português
+(padrão `"en"`).
 
 Um pedido ouvido por três PMs custa uma triagem, três pareceres (cada um
 com as suas consultas à HX) e uma síntese, mais uma rodada quando eles
@@ -485,6 +489,14 @@ enable_otel(send_to_logfire=True)  # ou False, para exportar para seu próprio c
 
 A API ainda muda entre versões, sem aliases de compatibilidade. Cada
 quebra é listada aqui.
+
+### 0.2 → 0.3
+
+| Antes | Depois |
+| --- | --- |
+| `squad/briefs/<brief_id>.md` guardava o `Brief` em JSON: `Brief.model_validate_json(kb.read(path).content)` | O `.md` é Markdown para uma pessoa ler ([ADR 0018](docs/adr/0018-notes-are-markdown-for-people.md)). O dado fica em `squad/briefs/<brief_id>.json`, apontado pelo frontmatter `data` da nota: `BriefRecord.model_validate_json(kb.read(json_path).content).brief` |
+| `committee.synthesis_note(synthesis, cycle_id, version)` | `notes.synthesis_note(synthesis, cycle_id, version, language)`, em `pydantic_squads.product.notes` |
+| `synthesis-<n>.md`, `decision.md` e `questions.md` tinham texto fixo em inglês, como `- Risk: ...`, `- Asked by: growth_pm` e `- Origin: hx_gap` | Mesmos caminhos e frontmatter. O corpo é diagramado para leitura, chama os papéis pelo nome de exibição (`Growth PM`) e sai no `language` da squad. Não faça parse do corpo |
 
 ### 0.1 → 0.2
 

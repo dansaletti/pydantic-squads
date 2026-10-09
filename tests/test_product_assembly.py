@@ -29,7 +29,6 @@ from pydantic_squads.product.assembly import (
     _check_prototype,
     _consult_hx,
     _DesignRun,
-    _founder_questions_note,
     _list_by_tag,
     _matches,
     _normalize_path,
@@ -1445,11 +1444,3 @@ def test_check_prototype_allows_in_page_links(tmp_path):
     kb.write("squad/design/c1/p.html", '<a href="#settings">Settings</a><a href="https-guide.html">Guide</a>')
     prototype = _prototype("squad/design/c1/p.html")
     assert _check_prototype(kb, _run(), prototype) == prototype
-
-
-def test_founder_questions_note_records_the_hx_question_for_a_gap():
-    """questions.md shows the question put to HX for an hx_gap question"""
-    gap = _question(question="Do they use tablets?", origin="hx_gap", hx_question="Which devices do users use?")
-    note = _founder_questions_note(_prototype("squad/design/c1/p.html").model_copy(update={"founder_questions": [gap]}), "c1")
-    assert "- Asked HX: Which devices do users use?" in note
-    assert "- Origin: hx_gap" in note

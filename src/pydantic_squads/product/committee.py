@@ -25,7 +25,7 @@ from pydantic_squads.product.contracts import (
     Synthesis,
     SynthesisDraft,
 )
-from pydantic_squads.product.knowledge import KnowledgeBase, format_note
+from pydantic_squads.product.knowledge import KnowledgeBase
 from pydantic_squads.product.observability import HX_SINK, SpanSink
 
 PMAgents = Mapping[str, Agent[KnowledgeBase, OpinionDraft]]
@@ -391,70 +391,3 @@ async def run_round(
     return Round(
         opinion_runs, rebuttal_runs, [first, second], build_synthesis(request, second.draft, given, replies, gaps)
     )
-
-
-def _opinion_section(opinion: Opinion) -> str:
-    lines = [f"### {opinion.role}", "", opinion.recommendation, "", f"- Confidence: {opinion.confidence}"]
-    lines.extend(f"- Risk: {risk}" for risk in opinion.risks)
-    lines.extend(f"- Question for the human: {question}" for question in opinion.questions_for_human)
-    lines.extend(f"- Source: {source}" for source in opinion.sources)
-    return "\n".join(lines)
-
-
-def synthesis_note(synthesis: Synthesis, cycle_id: str, version: int) -> str:
-    """The note the human reads at the gate: the synthesis, then everything it was made from.
-
-    Under "What we don't know" it lists each gap HX reported during the
-    round with the question that surfaced it and the PM that asked.
-    """
-    brief = synthesis.proposed_brief
-    sections = [f"# Synthesis\n\n## Request\n\n{synthesis.request}", f"## Summary\n\n{synthesis.summary}"]
-
-    if synthesis.divergences:
-        body = "\n\n".join(
-            f"### {d.topic}\n\n" + "\n".join(f"- {role}: {position}" for role, position in d.positions.items())
-            for d in synthesis.divergences
-        )
-    else:
-        body = "None."
-    sections.append(f"## Divergences\n\n{body}")
-
-    questions = "\n".join(f"- {q}" for q in synthesis.questions_for_human) or "None."
-    sections.append(f"## Questions for the human\n\n{questions}")
-
-    if synthesis.gaps:
-        body = "\n\n".join(
-            f"### {gap.gap}\n\n"
-            + "\n".join(f"- Asked HX: {question}" for question in gap.questions)
-            + f"\n- Asked by: {', '.join(gap.asked_by)}"
-            for gap in synthesis.gaps
-        )
-    else:
-        body = "HX reported no gap during this round."
-    sections.append(f"## What we don't know\n\n{body}")
-    if synthesis.raw_gaps != synthesis.gaps:
-        # The grouping is the Facilitator's: HX's own words stay next to it.
-        reported = "\n".join(
-            f"- {gap.gap} (asked by {', '.join(gap.asked_by)})" for gap in synthesis.raw_gaps
-        )
-        sections.append(f"## Gaps as HX reported them\n\n{reported}")
-
-    sections.append(
-        "## Proposed brief\n\n"
-        f"- Problem: {brief.problem}\n"
-        f"- Hypothesis: {brief.hypothesis}\n"
-        f"- Success metric: {brief.success_metric}\n"
-        + "\n".join(f"- Acceptance criterion: {criterion}" for criterion in brief.acceptance_criteria)
-        + f"\n- Owner roles: {', '.join(brief.owner_roles)}"
-    )
-    sections.append("## Opinions\n\n" + "\n\n".join(_opinion_section(o) for o in synthesis.opinions))
-    if synthesis.rebuttals:
-        sections.append("## Replies\n\n" + "\n\n".join(_opinion_section(o) for o in synthesis.rebuttals))
-
-    frontmatter: dict[str, str | list[str]] = {
-        "cycle_id": cycle_id,
-        "schema_version": "1",
-        "version": str(version),
-        "roles": [o.role for o in synthesis.opinions],
-    }
-    return format_note(frontmatter, "\n\n".join(sections) + "\n")

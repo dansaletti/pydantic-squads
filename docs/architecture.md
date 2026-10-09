@@ -85,7 +85,7 @@ A few things the table does not show:
 - **Modes.** A *conversational* role talks to the human. A *task* role takes one input and returns one output. A *delegate* is called by other roles as a tool. Two default policies hold for this squad: there is exactly one conversational role, and only it talks to the human ([ADR 0002](adr/0002-invariants-vs-policies.md)).
 - **No role can delete.** There is no delete permission and no delete operation on a knowledge base, anywhere.
 - **The PMs do not list each other.** "No free debate" is in the graph: a PM has no edge to another PM.
-- **Notes the squad writes itself.** The synthesis, the decision and the approved brief (`squad/committee/**`, `squad/briefs/**`) are written by the runtime, not by an agent's tool. No role has permission there, so no model can write a brief.
+- **Notes the squad writes itself.** The synthesis, the decision and the approved brief (`squad/committee/**`, `squad/briefs/**`) are written by the runtime, not by an agent's tool. No role has permission there, so no model can write a brief. They are rendered by code as Markdown for a person to read, in the squad's language ([ADR 0018](adr/0018-notes-are-markdown-for-people.md)).
 
 ## The four decisions that shape it
 
@@ -154,7 +154,8 @@ The knowledge base is a folder of notes (`MarkdownKnowledgeBase`) or anything th
 | --- | --- | --- |
 | `squad/committee/<cycle_id>/synthesis-<n>.md` | the runtime | each synthesis the human was shown. Readable by path, never a search result |
 | `squad/committee/<cycle_id>/decision.md` | the runtime | the verdict and its notes |
-| `squad/briefs/<brief_id>.md` | the runtime | an approved brief |
+| `squad/briefs/<brief_id>.md` | the runtime | an approved brief, for a person to read |
+| `squad/briefs/<brief_id>.json` | the runtime | the same brief as data (a `BriefRecord`) |
 | `squad/backlog/**` | Product Owner | its working notes |
 | `squad/design/<cycle_id>/` | Designer | the HTML prototype and `questions.md` |
 | `squad/content/<cycle_id>/` | Social Media | landing-page copy and posts |

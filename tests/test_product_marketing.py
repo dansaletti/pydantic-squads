@@ -232,7 +232,7 @@ def test_brand_question_the_marketing_pm_could_not_answer_reaches_the_founder(tm
     assert isinstance(prototype, Prototype)
     assert prototype.founder_questions == [_positioning()]
     note = kb.read(f"squad/design/{squad.cycle_id}/questions.md").content
-    assert f"- Asked PM Marketing: {TONE}" in note
+    assert f"- **Asked the Marketing PM:** {TONE}" in note
 
 
 def test_brand_question_never_put_to_the_marketing_pm_is_refused(tmp_path):

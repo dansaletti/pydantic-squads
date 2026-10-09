@@ -207,7 +207,10 @@ What holds this together, by code and not by prompt:
   HX's words. It is also written to
   `squad/committee/<cycle_id>/synthesis-<n>.md`.
 - **The decision is data.** `approve()` calls no model: it stamps a
-  `HumanDecision` and writes the `Brief` to `squad/briefs/<brief_id>.md`.
+  `HumanDecision` and writes the `Brief` to `squad/briefs/<brief_id>.md`,
+  as Markdown you can read, with the same brief as data in
+  `<brief_id>.json` next to it
+  ([ADR 0018](docs/adr/0018-notes-are-markdown-for-people.md)).
   A brief with a field missing, or without an approved decision, is
   rejected before the Product Owner's model is called
   ([ADR 0011](docs/adr/0011-brief-is-the-product-owners-only-door.md)).
@@ -223,7 +226,8 @@ approval. Such a write pauses the run and hands you back a
 is written; pass its resolution back as `deferred_tool_results` on the same
 method. After `approve()` or `reject()`, the next `chat()` starts a new
 request, with a new `cycle_id`. Pass `language="pt-BR"` to get the
-instruction labels in Portuguese (default `"en"`).
+instruction labels, and the notes the squad writes, in Portuguese
+(default `"en"`).
 
 A request heard by three PMs costs a triage, three opinions (each with its
 own HX consultations) and a synthesis, plus one more round when they
@@ -478,6 +482,14 @@ enable_otel(send_to_logfire=True)  # or False, to export to your own OTel collec
 
 The API still changes between versions, with no compatibility aliases.
 Each breaking change is listed here.
+
+### 0.2 → 0.3
+
+| Before | After |
+| --- | --- |
+| `squad/briefs/<brief_id>.md` held the `Brief` as JSON: `Brief.model_validate_json(kb.read(path).content)` | The `.md` is Markdown for a person ([ADR 0018](docs/adr/0018-notes-are-markdown-for-people.md)). The data is in `squad/briefs/<brief_id>.json`, named by the note's `data` frontmatter: `BriefRecord.model_validate_json(kb.read(json_path).content).brief` |
+| `committee.synthesis_note(synthesis, cycle_id, version)` | `notes.synthesis_note(synthesis, cycle_id, version, language)`, in `pydantic_squads.product.notes` |
+| `synthesis-<n>.md`, `decision.md` and `questions.md` had fixed English text such as `- Risk: ...`, `- Asked by: growth_pm` and `- Origin: hx_gap` | Same paths and frontmatter. The body is laid out for reading, names roles by their display name (`Growth PM`), and is in the squad's `language`. Do not parse the body |
 
 ### 0.1 → 0.2
 

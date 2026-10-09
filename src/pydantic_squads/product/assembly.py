@@ -60,7 +60,6 @@ from pydantic_squads.product.knowledge import (
     NoteExcerpt,
     SerializedKnowledgeBase,
     excerpt,
-    format_note,
 )
 from pydantic_squads.product.observability import (
     HX_SINK,
@@ -72,6 +71,7 @@ from pydantic_squads.product.observability import (
     merge_nested_spans,
     serialize_history,
 )
+from pydantic_squads.product.notes import brief_note, decision_note, founder_questions_note, synthesis_note
 from pydantic_squads.product.squad import COMMITTEE_ROLES, Language, build_product_squad
 from pydantic_squads.visualization import TerminalGantt
 
@@ -198,7 +198,10 @@ def _register_note_tools(agent: Agent[KnowledgeBase, Any], role: Role) -> None:
 
         @agent.tool(retries=_NOTE_TOOL_RETRIES)
         def write_note(ctx: RunContext[KnowledgeBase], path: str, content: str) -> str:
-            """Write a note by its path. Some paths require human approval first."""
+            """Write a note by its path. Some paths require human approval first.
+
+            A `.md` note is for a person to read: give it one `#` title, `##` sections,
+            short paragraphs and lists. Never write raw JSON as its content."""
             return _write_note(role, ctx.deps, path, content, approved=ctx.tool_call_approved)
 
 
@@ -690,29 +693,6 @@ def _content_prompt(brief: Brief, content_dir: str) -> str:
     )
 
 
-def _founder_questions_note(prototype: Prototype, cycle_id: str) -> str:
-    """The `questions.md` note: every open founder question, for the founder to answer."""
-    if not prototype.founder_questions:
-        body = "No open questions."
-    else:
-        sections = []
-        for q in prototype.founder_questions:
-            section = f"## {q.question}\n\n{q.context}\n\n- Origin: {q.origin}\n"
-            if q.hx_question is not None:
-                section += f"- Asked HX: {q.hx_question}\n"
-            if q.marketing_question is not None:
-                section += f"- Asked PM Marketing: {q.marketing_question}\n"
-            section += f"- Suggested default: {q.suggested_default}\n- Answer:"
-            sections.append(section)
-        body = "\n\n".join(sections)
-    frontmatter: dict[str, str | list[str]] = {
-        "cycle_id": cycle_id,
-        "schema_version": "1",
-        "prototype": prototype.html_path,
-    }
-    return format_note(frontmatter, f"# Questions for the founder\n\n{body}\n")
-
-
 # A model left to itself names the PMs as it would in prose ("PM de Growth"),
 # and the triage is retried: the ids are spelled out for it.
 _TRIAGE_ROLES = (
@@ -879,6 +859,7 @@ class ProductSquad:
     ) -> None:
         # Every write, by an agent's tool or by the squad itself, goes through one writer (ADR 0010).
         self.kb: KnowledgeBase = SerializedKnowledgeBase.wrap(kb)
+        self._language: Language = language
         squad = build_product_squad(language)
         models = dict(models or {})
         unknown = sorted(set(models) - {role.id for role in squad.roles})
@@ -1055,8 +1036,9 @@ class ProductSquad:
         """Approve the pending synthesis: its proposed brief becomes a `Brief`.
 
         The `HumanDecision` is stamped here, by code: no model is called.
-        The brief is written to `squad/briefs/<brief_id>.md` and is what
-        `submit_brief()` and `produce_content()` take.
+        The brief is written to `squad/briefs/<brief_id>.md` for a person to
+        read, with the same brief as data in `<brief_id>.json` next to it, and
+        is what `submit_brief()` and `produce_content()` take.
         """
         review = self._pending_review("approve")
         assert self._cycle_id is not None  # a pending review always belongs to a cycle
@@ -1065,12 +1047,8 @@ class ProductSquad:
         record = BriefRecord(
             brief_id=uuid.uuid4().hex, cycle_id=self._cycle_id, brief=brief, created_at=decision.decided_at
         )
-        frontmatter: dict[str, str | list[str]] = {
-            "cycle_id": record.cycle_id,
-            "schema_version": str(record.schema_version),
-            "brief_id": record.brief_id,
-        }
-        self.kb.write(f"squad/briefs/{record.brief_id}.md", format_note(frontmatter, brief.model_dump_json(indent=2)))
+        self.kb.write(f"squad/briefs/{record.brief_id}.json", record.model_dump_json(indent=2))
+        self.kb.write(f"squad/briefs/{record.brief_id}.md", brief_note(record, self._language))
         self._decide(decision, review, brief_id=record.brief_id)
         return brief
 
@@ -1083,17 +1061,14 @@ class ProductSquad:
 
     def _decide(self, decision: HumanDecision, review: _Review, *, brief_id: str | None = None) -> None:
         assert self._cycle_id is not None  # a pending review always belongs to a cycle
-        frontmatter: dict[str, str | list[str]] = {
-            "cycle_id": self._cycle_id,
-            "schema_version": "1",
-            "verdict": decision.verdict,
-            "decided_at": decision.decided_at.isoformat(),
-            "synthesis": f"squad/committee/{self._cycle_id}/synthesis-{review.version}.md",
-        }
-        if brief_id is not None:
-            frontmatter["brief"] = f"squad/briefs/{brief_id}.md"
-        body = f"# Decision: {decision.verdict}\n\n{decision.notes or 'No notes.'}\n"
-        self.kb.write(f"squad/committee/{self._cycle_id}/decision.md", format_note(frontmatter, body))
+        note = decision_note(
+            decision,
+            self._cycle_id,
+            f"squad/committee/{self._cycle_id}/synthesis-{review.version}.md",
+            f"squad/briefs/{brief_id}.md" if brief_id is not None else None,
+            self._language,
+        )
+        self.kb.write(f"squad/committee/{self._cycle_id}/decision.md", note)
         self._emit(
             [
                 Span(
@@ -1115,7 +1090,7 @@ class ProductSquad:
         assert self._review is not None and self._cycle_id is not None  # set by the round that just ran
         self.kb.write(
             f"squad/committee/{self._cycle_id}/synthesis-{self._review.version}.md",
-            committee.synthesis_note(self._review.synthesis, self._cycle_id, self._review.version),
+            synthesis_note(self._review.synthesis, self._cycle_id, self._review.version, self._language),
         )
 
     def submit_brief(self, brief: Brief | BriefDraft | Mapping[str, Any]) -> Backlog | BriefRejection:
@@ -1259,7 +1234,7 @@ class ProductSquad:
         self._designer_history = []
         if isinstance(output, Prototype):
             self._last_prototype = output
-            self.kb.write(f"{run.design_dir}/questions.md", _founder_questions_note(output, self._cycle_id))
+            self.kb.write(f"{run.design_dir}/questions.md", founder_questions_note(output, self._cycle_id, self._language))
         return output
 
     @property

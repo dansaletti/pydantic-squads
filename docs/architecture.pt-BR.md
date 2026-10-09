@@ -85,7 +85,7 @@ Algumas coisas que a tabela não mostra:
 - **Modos.** Um papel *conversacional* fala com o humano. Um papel de *tarefa* recebe uma entrada e devolve uma saída. Um *delegado* é chamado por outros papéis como ferramenta. Duas policies padrão valem para esta squad: existe exatamente um papel conversacional, e só ele fala com o humano ([ADR 0002](adr/0002-invariants-vs-policies.md)).
 - **Nenhum papel pode apagar.** Não existe permissão de delete nem operação de delete numa base de conhecimento, em lugar nenhum.
 - **Os PMs não listam uns aos outros.** O "sem debate livre" está no grafo: um PM não tem aresta para outro PM.
-- **Notas que a própria squad escreve.** A síntese, a decisão e o brief aprovado (`squad/committee/**`, `squad/briefs/**`) são gravados pelo runtime, não pela ferramenta de um agente. Nenhum papel tem permissão ali, então nenhum modelo consegue escrever um brief.
+- **Notas que a própria squad escreve.** A síntese, a decisão e o brief aprovado (`squad/committee/**`, `squad/briefs/**`) são gravados pelo runtime, não pela ferramenta de um agente. Nenhum papel tem permissão ali, então nenhum modelo consegue escrever um brief. Elas são renderizadas por código como Markdown para uma pessoa ler, no idioma da squad ([ADR 0018](adr/0018-notes-are-markdown-for-people.md)).
 
 ## As quatro decisões que dão forma a isso
 
@@ -154,7 +154,8 @@ A base de conhecimento é uma pasta de notas (`MarkdownKnowledgeBase`) ou qualqu
 | --- | --- | --- |
 | `squad/committee/<cycle_id>/synthesis-<n>.md` | o runtime | cada síntese mostrada ao humano. Legível pelo caminho, nunca resultado de busca |
 | `squad/committee/<cycle_id>/decision.md` | o runtime | o veredito e as notas |
-| `squad/briefs/<brief_id>.md` | o runtime | um brief aprovado |
+| `squad/briefs/<brief_id>.md` | o runtime | um brief aprovado, para uma pessoa ler |
+| `squad/briefs/<brief_id>.json` | o runtime | o mesmo brief como dado (um `BriefRecord`) |
 | `squad/backlog/**` | Product Owner | notas de trabalho dele |
 | `squad/design/<cycle_id>/` | Designer | o protótipo HTML e o `questions.md` |
 | `squad/content/<cycle_id>/` | Social Media | copy de landing page e posts |
