@@ -349,3 +349,53 @@ def test_main_chat_reports_missing_extras_as_a_friendly_error(tmp_path, capsys, 
     exit_code = main(["chat", str(tmp_path), "--model", "test"])
     assert exit_code == 1
     assert "pydantic-squads[ai,observability]" in capsys.readouterr().err
+
+
+def _skills_config_file(tmp_path, body: str = "skills:\n  rules:\n    designer: [Read MASTER.md first.]\n"):
+    config = tmp_path / "squads.yaml"
+    config.write_text(body)
+    return str(config)
+
+
+def test_main_chat_takes_a_skills_config(tmp_path, capsys, monkeypatch):
+    """--config hands the file's skills section to the squad"""
+    pytest.importorskip("pydantic_ai_skills", reason="requires the 'skills' extra: uv sync --extra skills")
+    _chat_without_input(monkeypatch)
+    assert main(["chat", str(tmp_path), "--model", "test", "--config", _skills_config_file(tmp_path)]) == 0
+
+
+def test_main_chat_reports_a_skills_config_it_cannot_use(tmp_path, capsys):
+    """A config that is missing, or names a role the squad does not have, is reported and returns 1"""
+    pytest.importorskip("pydantic_ai_skills", reason="requires the 'skills' extra: uv sync --extra skills")
+    assert main(["chat", str(tmp_path), "--model", "test", "--config", str(tmp_path / "missing.yaml")]) == 1
+    assert "missing.yaml" in capsys.readouterr().err
+    config = _skills_config_file(tmp_path, "skills:\n  rules:\n    orchestrator: [x]\n")
+    assert main(["chat", str(tmp_path), "--model", "test", "--config", config]) == 1
+    assert "orchestrator" in capsys.readouterr().err
+
+
+def test_main_chat_config_reports_a_missing_skills_extra(tmp_path, capsys, monkeypatch):
+    """--config without the skills extra prints an install hint, not a traceback"""
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    assert main(["chat", str(tmp_path), "--model", "test", "--config", _skills_config_file(tmp_path)]) == 1
+    assert "uv sync --extra skills" in capsys.readouterr().err
+
+
+def test_main_skills_install_clones_and_reports_the_license(tmp_path, capsys, monkeypatch):
+    """skills install clones the repository into --dir and prints where it landed and its license"""
+
+    def fake_git(command, **kwargs):
+        target = tmp_path / "pm-skills"
+        target.mkdir()
+        (target / "LICENSE").write_text("MIT License\n")
+
+    monkeypatch.setattr("subprocess.run", fake_git)
+    assert main(["skills", "install", "phuryn/pm-skills", "--dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert f"Installed in {tmp_path / 'pm-skills'}" in out and "License: MIT License" in out
+
+
+def test_main_skills_install_reports_a_repository_it_cannot_install(tmp_path, capsys):
+    """skills install on something that is not a repository reports it and returns 1"""
+    assert main(["skills", "install", "not a repo", "--dir", str(tmp_path)]) == 1
+    assert "is not a GitHub owner/name" in capsys.readouterr().err
