@@ -1,0 +1,107 @@
+# Project skills for the product squad (ADR 0019): Phase 1, Product PM and Designer.
+#
+# Install the three repositories first (each is MIT; nothing of theirs is in this repo):
+#
+#   pydantic-squads skills install phuryn/pm-skills
+#   pydantic-squads skills install nextlevelbuilder/ui-ux-pro-max-skill
+#   pydantic-squads skills install Leonxlnx/taste-skill
+#
+# Then: pydantic-squads chat <vault> --config skills.yaml
+#
+# Replace the two placeholders below: the product name and the vault path.
+
+skills:
+  # Searched however deep. A relative path is resolved against this file's folder.
+  paths:
+    - ~/.squads/skills/pm-skills
+    - ~/.squads/skills/ui-ux-pro-max-skill
+    - ~/.squads/skills/taste-skill
+
+  # What each role loads on top of the library's own skills. A pattern is a
+  # skill's name, or a glob on where it sits under one of the paths.
+  roles:
+    pm_product:
+      - pm-product-discovery/*
+      - pm-market-research/*
+    designer:
+      - ui-ux-pro-max
+      - design-taste-frontend
+
+  # A repository's own workflows: Markdown files, outside any skill, that
+  # chain several skills (pm-skills calls them commands: /discover,
+  # /research-users). Each reaches the role as a skill of the same name,
+  # read from the installed file, so `skills install --update` is all it
+  # takes to follow a change upstream.
+  commands:
+    pm_product:
+      - pm-product-discovery/commands/*
+      - pm-market-research/commands/*
+
+  # Added to each role's principles.
+  rules:
+    pm_product:
+      - "Skills are method, never a source of facts: facts about the product and its users come from HX and the knowledge base"
+      - "When mapping a journey or building an opportunity tree, mark each item as an assumption or as evidence"
+      - "For a whole discovery or research cycle, load the workflow first (discover, research-users) and follow its steps in order"
+    designer:
+      - "Fixed order: build the foundation with ui-ux-pro-max first, then apply design-taste-frontend to the piece at hand"
+      - "Persist the design system with persist_design_system before building any page; it is written under design-system/ in the knowledge base"
+      - "Before creating a page, read design-system/<project>/MASTER.md and that page's override under pages/, when there is one"
+      - "A palette or typography a skill suggests is a starting point: brand, tone and positioning come from HX and the Marketing PM, and what they cannot settle is a question for the founder"
+      - "When the two skills disagree, ui-ux-pro-max wins on tokens and accessibility, and design-taste-frontend wins on composition and visual style"
+
+  # Skill scripts as typed tools. The model fills `params` and nothing else;
+  # `fixed_args` are this file's, so the model never picks a destination.
+  tools:
+    - name: design_search
+      roles: [designer]
+      skill: ui-ux-pro-max
+      script: scripts/search.py
+      description: >-
+        Search the UI/UX Pro Max data (styles, palettes, typography, UX guidelines, landing
+        patterns). Give a domain to search one kind of data, or a stack for stack-specific
+        guidelines. Reads only.
+      approval: false
+      params:
+        - {name: query, required: true, description: "What to look for, e.g. 'calm wellness app'"}
+        - name: domain
+          flag: --domain
+          choices: [style, color, chart, landing, product, ux, typography, icons, gsap, react, web, google-fonts]
+        - name: stack
+          flag: --stack
+          choices: [react, nextjs, vue, svelte, astro, swiftui, react-native, flutter, html-tailwind, shadcn]
+        - {name: max_results, type: integer, flag: --max-results, minimum: 1, maximum: 20}
+
+    - name: design_system
+      roles: [designer]
+      skill: ui-ux-pro-max
+      script: scripts/search.py
+      description: >-
+        Generate a complete design-system recommendation (pattern, style, colors, typography,
+        effects, anti-patterns) for a product description, without saving it. Reads only.
+      approval: false
+      fixed_args: [--design-system, --format, markdown, --project-name, "My Product"]
+      params:
+        - {name: query, required: true, description: "The product and its mood, e.g. 'cycle tracking app, calm, warm'"}
+
+    - name: persist_design_system
+      roles: [designer]
+      skill: ui-ux-pro-max
+      script: scripts/search.py
+      description: >-
+        Generate the design system and save it in the knowledge base as
+        design-system/<project>/MASTER.md. Give `page` to also write that page's override under
+        pages/. An existing MASTER.md is kept, never overwritten. Needs the founder's approval.
+      # approval: true is the default: this one writes to design-system/ (ADR 0007).
+      fixed_args:
+        - --design-system
+        - --persist
+        - --format
+        - markdown
+        - --project-name
+        - "My Product"
+        - --output-dir
+        - ~/path/to/your/vault
+      params:
+        - {name: query, required: true, description: "The product and its mood"}
+        - {name: page, flag: --page, description: "A page to write an override for, e.g. 'landing'"}

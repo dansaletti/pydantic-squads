@@ -53,9 +53,27 @@ items below are being built through it, in phases:
     with no code to write, on the recommended Claude Code setup by default
     — `pydantic_squads.product.chat` (see ADR 0017).
 
+13. **Project skills**: a project installs third-party skills
+    (`pydantic-squads skills install`), maps them to roles in a config
+    file and exposes a skill's script as a typed, approval-gated tool —
+    `pydantic_squads.product.skills_config`, `.skill_registry` and
+    `.skill_tools` (see ADR 0019). Phase 1 wires the Product PM
+    (`pm-product-discovery`, `pm-market-research`) and the Designer
+    (`ui-ux-pro-max`, `design-taste-frontend`) in `examples/skills.yaml`.
+
 ## Next
 
 Open, with no commitment:
+
+- Project skills, Phase 2 (config only, nothing to build): the Marketing PM
+  with `pm-marketing-growth`, the Growth PM with `pm-go-to-market` next to
+  its own growth skills, the Product Owner with `pm-execution`. That last
+  one carries a `user-stories` skill, the name of one the Product Owner
+  already has: leave it out with a `!` pattern.
+- Project skills, Phase 3: trend listening with `last30days` for the
+  Marketing PM or HX (it needs network access, which no skill tool has
+  been declared with so far), and OpenSpec as the Product Owner's hand-off
+  format once there are development agents.
 
 - Wire the Gantt into `pydantic-squads trace` (ADR 0009 left it as a
   separate decision).

@@ -4,7 +4,8 @@
 `ProductSquad(trace_dir=...)` (ADR 0006). `chat` is a terminal session
 with the product squad (ADR 0017). Both need the `ai` extra and the
 `observability` extra (`rich`); they are imported lazily, so importing
-this module alone never requires either.
+this module alone never requires either. `skills install` clones a skills
+repository into a local folder (ADR 0019) and needs only git.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from pydantic_squads.product.skills_install import DEFAULT_SKILLS_HOME, install_skills, license_line
 
 DEFAULT_TRACE_DIR = "traces"
 DEFAULT_SLOW_THRESHOLD_MS = 5000.0
@@ -264,6 +267,18 @@ def _chat(args: argparse.Namespace) -> int:
         return 1
     context = Path(args.context).read_text(encoding="utf-8") if Path(args.context).is_file() else args.context
     skills_dirs = [Path(d) for d in args.skills_dir] if args.skills or args.skills_dir else None
+    skills_config = None
+    if args.config:
+        try:
+            from pydantic_squads.product.skills_config import load_skills_config
+
+            skills_config = load_skills_config(args.config)
+        except ImportError:
+            print("pydantic-squads chat --config needs: uv sync --extra skills", file=sys.stderr)
+            return 1
+        except (OSError, ValueError) as exc:
+            print(f"pydantic-squads chat: {exc}", file=sys.stderr)
+            return 1
 
     def make_squad() -> Any:
         return ProductSquad(
@@ -273,18 +288,32 @@ def _chat(args: argparse.Namespace) -> int:
             context=context,
             language=args.language,
             skills_dirs=skills_dirs,
+            skills=skills_config,
             usage_limits=UsageLimits(request_limit=args.request_limit) if args.request_limit else None,
             trace_dir=args.trace_dir,
         )
 
     try:
         session = ChatSession(make_squad)
-    except ValueError as exc:  # a --role-model naming a role the squad does not have
+    except ValueError as exc:  # a --role-model or a skills config naming what the squad does not have
         print(f"pydantic-squads chat: {exc}", file=sys.stderr)
         return 1
     exceptions = ", ".join(f"{role_id} on {m}" for role_id, m in models.items())
     session.console.print(f"Model: {model}" + (f" (except {exceptions})" if exceptions else ""))
     session.run()
+    return 0
+
+
+def _skills_install(args: argparse.Namespace) -> int:
+    """Run `pydantic-squads skills install`: clone a skills repository into a local folder (ADR 0019)."""
+    try:
+        folder = install_skills(args.repo, args.dir, update=args.update)
+    except (FileExistsError, ValueError) as exc:
+        print(f"pydantic-squads skills install: {exc}", file=sys.stderr)
+        return 1
+    print(f"Installed in {folder}")
+    print(f"License: {license_line(folder) or 'no license file found: check the repository before using it'}")
+    print("Add this folder to `skills.paths` in your config, and name its skills under `skills.roles`.")
     return 0
 
 
@@ -323,9 +352,23 @@ def main(argv: list[str] | None = None) -> int:
         "--skills-dir", action="append", default=[], metavar="DIR", help="a folder of more skills; repeatable"
     )
 
+    chat_parser.add_argument(
+        "--config", default=None, metavar="FILE", help="a YAML file whose skills: section maps roles to skills"
+    )
+
+    skills_parser = subparsers.add_parser("skills", help="Manage the skills a project installs")
+    install_parser = skills_parser.add_subparsers(dest="skills_command", required=True).add_parser(
+        "install", help="Clone a skills repository into a local folder"
+    )
+    install_parser.add_argument("repo", help="a GitHub owner/name, or an https:// URL")
+    install_parser.add_argument("--dir", default=str(DEFAULT_SKILLS_HOME), help="where skills repositories are kept")
+    install_parser.add_argument("--update", action="store_true", help="fast-forward a repository already installed")
+
     args = parser.parse_args(argv)
     if args.command == "chat":
         return _chat(args)
+    if args.command == "skills":
+        return _skills_install(args)
 
     try:
         report = build_report(

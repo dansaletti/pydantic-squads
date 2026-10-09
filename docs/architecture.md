@@ -178,6 +178,7 @@ A *cycle* is one request, from its conversation to what is built from its brief.
 | `product.observability` | spans and the trace file | yes |
 | `product.claude_code` | running on a local Claude Code login | yes |
 | `product.skills_integration`, `product.otel` | optional skills and telemetry export | yes |
+| `product.skills_config`, `product.skill_registry`, `product.skill_tools`, `product.skills_install` | a project's own skills: its config, finding them on disk, running a declared script, installing a repository (ADR 0019) | no |
 | `visualization` | the terminal Gantt, standard library only | no |
 
 Tests never call an LLM: every agent is played by a fake model, which is also why the rules above are written as code that a test can check.

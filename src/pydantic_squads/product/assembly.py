@@ -72,6 +72,7 @@ from pydantic_squads.product.observability import (
     serialize_history,
 )
 from pydantic_squads.product.notes import brief_note, decision_note, founder_questions_note, synthesis_note
+from pydantic_squads.product.skills_config import SkillsConfig
 from pydantic_squads.product.squad import COMMITTEE_ROLES, Language, build_product_squad
 from pydantic_squads.visualization import TerminalGantt
 
@@ -435,17 +436,13 @@ def _with_context(instructions: str, context: str, language: Language) -> str:
     return f"{instructions}\n\n## {_CONTEXT_HEADING[language]}\n{context}"
 
 
-def _skill_kwargs(build_role_skills: Any, all_skills_dirs: list[Path] | None, role: Role) -> dict[str, list[Any]]:
+def _skill_kwargs(squad_skills: Any, role: Role) -> dict[str, list[Any]]:
     """`capabilities=`/`toolsets=` kwargs exposing `role`'s skills, or `{}` when skills are off."""
-    if build_role_skills is None:
-        return {}
-    capability, toolset = build_role_skills(role, all_skills_dirs)
-    kwargs: dict[str, list[Any]] = {}
-    if capability is not None:
-        kwargs["capabilities"] = [capability]
-    if toolset is not None:
-        kwargs["toolsets"] = [toolset]
-    return kwargs
+    return {} if squad_skills is None else squad_skills.kwargs_for(role)
+
+
+# The roles whose runs can stop for the human and resume (ADR 0004, ADR 0007).
+_PAUSING_ROLES = frozenset({"facilitator", "designer"})
 
 
 @dataclass(frozen=True)
@@ -472,16 +469,23 @@ def _build_agents(
     context: str,
     language: Language,
     skills_dirs: list[Path] | None,
+    skills: SkillsConfig | None,
 ) -> _Agents:
     # Imported lazily and only when skills are actually requested, so the `ai`
-    # extra alone (skills_dirs=None, the default) never needs the `skills`
-    # extra installed.
-    build_role_skills: Any = None
-    all_skills_dirs: list[Path] | None = None
-    if skills_dirs is not None:
-        from pydantic_squads.product.skills_integration import LIBRARY_SKILLS_DIR, build_role_skills
+    # extra alone (no skills_dirs and no skills, the default) never needs the
+    # `skills` extra installed.
+    squad_skills: Any = None
+    if skills_dirs is not None or skills is not None:
+        from pydantic_squads.product.skills_integration import SquadSkills
 
-        all_skills_dirs = [LIBRARY_SKILLS_DIR, *skills_dirs]
+        squad_skills = SquadSkills(squad, [Path(d) for d in skills_dirs or []], skills)
+        squad = squad_skills.squad  # with the project's skills and rules on each role (ADR 0019)
+        stuck = sorted(squad_skills.gated_roles - _PAUSING_ROLES)
+        if stuck:
+            raise ValueError(
+                f"skill tools that need approval were declared for roles that cannot pause for it: {stuck}. "
+                f"Only {sorted(_PAUSING_ROLES)} can; set `approval: false` on a tool that writes nothing."
+            )
 
     # "claude-code" / "claude-code:<model>" runs on the local Claude Code login (ADR 0008).
     default_model = resolve_model(model)
@@ -496,7 +500,7 @@ def _build_agents(
         deps_type=KnowledgeBase,
         output_type=[str, DeferredToolRequests],
         system_prompt=facilitator_prompt,
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["facilitator"]),
+        **_skill_kwargs(squad_skills, squad["facilitator"]),
     )
     _register_note_tools(facilitator, squad["facilitator"])
 
@@ -509,7 +513,7 @@ def _build_agents(
         output_type=[Triage, DeferredToolRequests],
         retries={"output": _HX_OUTPUT_RETRIES},
         system_prompt=facilitator_prompt,
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["facilitator"]),
+        **_skill_kwargs(squad_skills, squad["facilitator"]),
     )
     _register_note_tools(triager, squad["facilitator"])
     _register_triage_validator(triager)
@@ -534,7 +538,7 @@ def _build_agents(
         output_type=HXAnswer,  # no DeferredToolRequests: HX is read-only (ADR 0004, ADR 0010)
         retries={"output": _HX_OUTPUT_RETRIES},
         system_prompt=_with_context(squad.instructions_for("hx"), context, language),
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["hx"]),
+        **_skill_kwargs(squad_skills, squad["hx"]),
     )
     _register_note_tools(hx, squad["hx"])
     _register_source_validator(hx)
@@ -544,7 +548,7 @@ def _build_agents(
         deps_type=KnowledgeBase,
         output_type=[Backlog, BriefRejection],  # the PO rejects a brief, it never asks back (ADR 0011)
         system_prompt=_with_context(squad.instructions_for("product_owner"), context, language),
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["product_owner"]),
+        **_skill_kwargs(squad_skills, squad["product_owner"]),
     )
     _register_note_tools(po, squad["product_owner"])
 
@@ -555,7 +559,7 @@ def _build_agents(
         deps_type=KnowledgeBase,
         output_type=[Prototype, SendBack, DeferredToolRequests],
         system_prompt=_with_context(squad.instructions_for("designer"), context, language),
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["designer"]),
+        **_skill_kwargs(squad_skills, squad["designer"]),
     )
     _register_note_tools(designer, squad["designer"])
     design_box: list[_DesignRun | None] = [None]
@@ -575,7 +579,7 @@ def _build_agents(
         output_type=MarketingGuidance,
         retries={"output": _HX_OUTPUT_RETRIES},
         system_prompt=_with_context(squad.instructions_for("pm_marketing"), context, language),
-        **_skill_kwargs(build_role_skills, all_skills_dirs, marketing_role),
+        **_skill_kwargs(squad_skills, marketing_role),
     )
     _register_note_tools(
         marketing, marketing_role.model_copy(update={"tools": ["search_notes", "read_note"]})
@@ -595,7 +599,7 @@ def _build_agents(
         output_type=ContentPack,
         retries={"output": _HX_OUTPUT_RETRIES},
         system_prompt=_with_context(squad.instructions_for("social_media"), context, language),
-        **_skill_kwargs(build_role_skills, all_skills_dirs, squad["social_media"]),
+        **_skill_kwargs(squad_skills, squad["social_media"]),
     )
     _register_note_tools(social, squad["social_media"])
     content_box: list[str | None] = [None]
@@ -614,7 +618,7 @@ def _build_agents(
             output_type=OpinionDraft,
             retries={"output": _HX_OUTPUT_RETRIES},
             system_prompt=_with_context(squad.instructions_for(role_id), context, language),
-            **_skill_kwargs(build_role_skills, all_skills_dirs, role),
+            **_skill_kwargs(squad_skills, role),
         )
         _register_note_tools(pm, role)
         _register_opinion_source_validator(pm)
@@ -804,6 +808,14 @@ class ProductSquad:
     ever sees the skills listed in its own `Role.skills`. See
     `pydantic_squads.product.skills_integration` and ADR 0005.
 
+    `skills` (a `SkillsConfig`) is the project's own say on skills
+    (ADR 0019): the directories its skills are installed in, the ones each
+    role loads on top of the library's, the rules each role follows when
+    using them, and the skill scripts exposed as typed tools. It turns skill
+    support on by itself. A tool that needs approval pauses the run like an
+    approval-gated write, so it can only be declared for the Facilitator or
+    the Designer.
+
     HX is a read-only query tool: each `consult_hx` call is a fresh run with
     no memory of the previous one, so callers can overlap. `kb` is wrapped in
     a `SerializedKnowledgeBase`, so every write goes through one writer at a
@@ -856,6 +868,7 @@ class ProductSquad:
         usage_limits: UsageLimits | None = None,
         trace_dir: Path | str | None = None,
         models: Mapping[str, Any] | None = None,
+        skills: SkillsConfig | None = None,
     ) -> None:
         # Every write, by an agent's tool or by the squad itself, goes through one writer (ADR 0010).
         self.kb: KnowledgeBase = SerializedKnowledgeBase.wrap(kb)
@@ -865,7 +878,7 @@ class ProductSquad:
         unknown = sorted(set(models) - {role.id for role in squad.roles})
         if unknown:
             raise ValueError(f"models names roles the squad does not have: {unknown}")
-        agents = _build_agents(squad, model, models, context, language, skills_dirs)
+        agents = _build_agents(squad, model, models, context, language, skills_dirs, skills)
         self._facilitator, self._triager, self._synthesizer = agents.facilitator, agents.triager, agents.synthesizer
         self._hx, self._po, self._designer = agents.hx, agents.po, agents.designer
         self._pms, self._marketing, self._social = agents.pms, agents.marketing, agents.social

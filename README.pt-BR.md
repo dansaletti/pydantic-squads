@@ -187,8 +187,9 @@ seu sim ou não. Sem opção de modelo, a sessão roda a
 Claude Code, o que consome os limites do seu plano. `--model` aceita
 qualquer string de modelo do Pydantic AI, para rodar com API key;
 `--pm-model`, `--hx-model` e `--role-model PAPEL=MODELO` mudam papéis
-isolados. `--context` também aceita o caminho de um arquivo, e `--skills`
-dá aos papéis as skills da biblioteca. Veja a
+isolados. `--context` também aceita o caminho de um arquivo, `--skills`
+dá aos papéis as skills da biblioteca, e `--config ARQUIVO` soma
+[as do seu projeto](#skills-do-projeto). Veja a
 [ADR 0017](docs/adr/0017-chat-command.md).
 
 O que sustenta isso, por código e não por prompt:
@@ -401,6 +402,98 @@ do mesmo jeito que `write_with_approval` governa uma escrita de nota:
 `DeferredToolRequests`, `"free"` roda sem pedir aprovação. Ler os arquivos
 de uma skill com `read_skill_resource` é sempre livre.
 
+#### Skills do projeto
+
+A biblioteca traz o mecanismo; o seu projeto decide quais skills cada papel
+usa ([ADR 0019](docs/adr/0019-project-skills-and-typed-skill-tools.md)).
+Skills de terceiros não são versionadas neste repositório: instale-as
+localmente e depois ligue cada uma a um papel num arquivo de configuração.
+
+```bash
+pydantic-squads skills install phuryn/pm-skills
+pydantic-squads skills install nextlevelbuilder/ui-ux-pro-max-skill
+pydantic-squads skills install Leonxlnx/taste-skill
+pydantic-squads chat VAULT --config skills.yaml
+```
+
+`skills install` aceita um `dono/nome` do GitHub ou uma URL `https://` e
+clona em `~/.squads/skills/` (`--dir` muda o destino, `--update` atualiza
+com fast-forward). A configuração é a seção `skills:` de um arquivo YAML:
+
+```yaml
+skills:
+  paths:                       # buscados em qualquer profundidade
+    - ~/.squads/skills/pm-skills
+    - ~/.squads/skills/ui-ux-pro-max-skill
+    - ~/.squads/skills/taste-skill
+  roles:                       # somadas às skills que cada papel já tem
+    pm_product: [pm-product-discovery/*, pm-market-research/*]
+    designer: [ui-ux-pro-max, design-taste-frontend]
+  commands:                    # os arquivos de workflow de um repositório, como skills
+    pm_product: [pm-product-discovery/commands/*, pm-market-research/commands/*]
+  rules:                       # somadas aos princípios de cada papel
+    designer:
+      - "Build the foundation with ui-ux-pro-max first, then apply design-taste-frontend"
+  tools:                       # o script de uma skill, como tool tipada
+    - name: persist_design_system
+      roles: [designer]
+      skill: ui-ux-pro-max
+      script: scripts/search.py
+      description: Generate the design system and save it in the knowledge base.
+      fixed_args: [--design-system, --persist, --project-name, "My Product", --output-dir, ~/my-vault]
+      params:
+        - {name: query, required: true}
+        - {name: page, flag: --page}
+```
+
+O [`examples/skills.yaml`](examples/skills.yaml) é a versão completa. Em
+Python, passe a mesma coisa como `ProductSquad(..., skills=SkillsConfig(...))`
+ou `skills=load_skills_config("skills.yaml")`, os dois em
+`pydantic_squads.product.skills_config`.
+
+- **Um padrão** em `roles` é o nome de uma skill (o `name` do frontmatter
+  do `SKILL.md`) ou um glob sobre onde ela fica dentro de um dos `paths`;
+  `!padrão` tira o que casar. Um padrão que não casa com nada é erro.
+- **Commands**: alguns repositórios trazem workflows como slash commands,
+  um arquivo Markdown fora de qualquer skill que encadeia várias skills
+  (`/discover` no pm-skills). Aqui não existem slash commands, então um
+  arquivo escolhido em `commands` chega ao papel como uma skill com o nome
+  do arquivo (`discover`), contendo o workflow como foi escrito. Ele é lido
+  do arquivo instalado toda vez que a squad é montada: basta um
+  `skills install --update` para acompanhar uma mudança na origem.
+- **Divulgação progressiva**: o prompt de um agente lista só o nome e a
+  descrição das skills do seu próprio papel. Ele carrega as instruções de
+  uma com `load_capability` e lê os arquivos dela com
+  `read_skill_resource`, que nunca sai da pasta da skill.
+- **Scripts**: os scripts de uma skill do projeto rodam só como as tools
+  declaradas em `tools`. O modelo preenche `params`, validados por um
+  modelo Pydantic (tipos, `choices`, `minimum`/`maximum`); os `fixed_args`
+  são seus, então o modelo nunca escolhe um destino. O script roda sem
+  shell, com `timeout` (30 segundos por padrão) e com a pasta da skill como
+  diretório de trabalho.
+- **Aprovação**: uma tool espera o seu sim ou não, a menos que diga
+  `approval: false`, que serve para um script que não escreve nada. Só o
+  Facilitator e o Designer conseguem pausar, então só eles podem ter uma
+  tool que pede aprovação.
+
+As skills para as quais isto foi feito, nenhuma delas neste repositório:
+
+| Papel | Skills | Origem | Licença | Situação |
+| --- | --- | --- | --- | --- |
+| Product PM | `pm-product-discovery`, `pm-market-research` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Fase 1, no `examples/skills.yaml` |
+| Designer | `ui-ux-pro-max` (fundação: tokens, paleta, tipografia, acessibilidade) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) | MIT | Fase 1, no `examples/skills.yaml` |
+| Designer | `design-taste-frontend` (direção visual de uma página) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) | MIT | Fase 1, no `examples/skills.yaml` |
+| Marketing PM | `pm-marketing-growth` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Fase 2, não ligada |
+| Growth PM | `pm-go-to-market` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Fase 2, não ligada |
+| Product Owner | `pm-execution` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Fase 2, não ligada |
+| Marketing PM ou HX | `last30days` (escuta de tendências) | [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill) | MIT | Fase 3, não ligada |
+| Product Owner | OpenSpec (formato de handoff para devs) | [Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec) | MIT | Fase 3, não ligada |
+
+O HX não recebe skill externa: ele é a fonte de conhecimento do produto, e
+os outros papéis o consultam. Uma skill é método, nunca fonte de fatos.
+Confira a licença de cada repositório antes de usar; o `skills install`
+mostra a primeira linha da que encontrar.
+
 ## Observabilidade
 
 Veja a [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). Um
@@ -534,7 +627,9 @@ O [pydantic-team](https://github.com/Etiqa/pydantic-team) oferece padrões de ti
 ```bash
 uv sync  # adicione --extra ai para tests/test_product_assembly.py, tests/test_product_committee.py,
          # tests/test_product_marketing.py e tests/test_product_observability.py,
-         # --extra skills para tests/test_product_skills.py,
+         # --extra skills para tests/test_product_skills.py, tests/test_product_project_skills.py,
+         # tests/test_product_skill_registry.py, tests/test_product_skill_tools.py
+         # e tests/test_product_skills_config.py,
          # --extra observability para tests/test_cli.py e tests/test_product_chat.py,
          # --extra otel para tests/test_product_otel.py
 uv run pytest

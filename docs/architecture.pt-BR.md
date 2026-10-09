@@ -178,6 +178,7 @@ Um *ciclo* é um pedido, da conversa até o que é construído a partir do brief
 | `product.observability` | spans e o arquivo de trace | sim |
 | `product.claude_code` | rodar num login local do Claude Code | sim |
 | `product.skills_integration`, `product.otel` | skills opcionais e exportação de telemetria | sim |
+| `product.skills_config`, `product.skill_registry`, `product.skill_tools`, `product.skills_install` | as skills do próprio projeto: a configuração, a busca em disco, a execução de um script declarado, a instalação de um repositório (ADR 0019) | não |
 | `visualization` | o Gantt no terminal, só biblioteca padrão | não |
 
 Os testes nunca chamam um LLM: cada agente é interpretado por um modelo falso, e é também por isso que as regras acima estão escritas como código que um teste consegue verificar.

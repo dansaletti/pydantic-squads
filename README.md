@@ -185,7 +185,8 @@ counts against your plan's limits. `--model` takes any Pydantic AI model
 string instead, to run on an API key; `--pm-model`, `--hx-model` and
 `--role-model ROLE=MODEL` change single roles. `--context` also takes a
 path to a file, `--language pt-BR` makes the agents answer in Portuguese,
-and `--skills` gives the roles the library's skills. See
+`--skills` gives the roles the library's skills, and `--config FILE` adds
+[your project's own](#project-skills). See
 [ADR 0017](docs/adr/0017-chat-command.md).
 
 What holds this together, by code and not by prompt:
@@ -397,6 +398,99 @@ the tool, `"approval"` defers it as a `DeferredToolRequests`, `"free"` runs
 it unwrapped. Reading a skill's bundled files with `read_skill_resource` is
 always free.
 
+#### Project skills
+
+The library ships the mechanism; your project decides which skills each
+role uses ([ADR 0019](docs/adr/0019-project-skills-and-typed-skill-tools.md)).
+Third-party skills are not versioned in this repository: install them
+locally, then map them to roles in a config file.
+
+```bash
+pydantic-squads skills install phuryn/pm-skills
+pydantic-squads skills install nextlevelbuilder/ui-ux-pro-max-skill
+pydantic-squads skills install Leonxlnx/taste-skill
+pydantic-squads chat VAULT --config skills.yaml
+```
+
+`skills install` takes a GitHub `owner/name` or an `https://` URL and
+clones it into `~/.squads/skills/` (`--dir` changes that, `--update`
+fast-forwards). The config is the `skills:` section of a YAML file:
+
+```yaml
+skills:
+  paths:                       # searched however deep
+    - ~/.squads/skills/pm-skills
+    - ~/.squads/skills/ui-ux-pro-max-skill
+    - ~/.squads/skills/taste-skill
+  roles:                       # added to the skills each role already has
+    pm_product: [pm-product-discovery/*, pm-market-research/*]
+    designer: [ui-ux-pro-max, design-taste-frontend]
+  commands:                    # a repository's workflow files, as skills
+    pm_product: [pm-product-discovery/commands/*, pm-market-research/commands/*]
+  rules:                       # added to each role's principles
+    designer:
+      - "Build the foundation with ui-ux-pro-max first, then apply design-taste-frontend"
+  tools:                       # a skill's script, as a typed tool
+    - name: persist_design_system
+      roles: [designer]
+      skill: ui-ux-pro-max
+      script: scripts/search.py
+      description: Generate the design system and save it in the knowledge base.
+      fixed_args: [--design-system, --persist, --project-name, "My Product", --output-dir, ~/my-vault]
+      params:
+        - {name: query, required: true}
+        - {name: page, flag: --page}
+```
+
+[`examples/skills.yaml`](examples/skills.yaml) is the complete version. In
+Python, pass the same thing as `ProductSquad(..., skills=SkillsConfig(...))`
+or `skills=load_skills_config("skills.yaml")`, both from
+`pydantic_squads.product.skills_config`.
+
+- **A pattern** under `roles` is a skill's name (the `name` in its
+  `SKILL.md` frontmatter) or a glob on where it sits under one of the
+  `paths`; `!pattern` leaves matches out. A pattern that matches nothing
+  is an error.
+- **Commands**: some repositories ship workflows as slash commands, a
+  Markdown file outside any skill that chains several skills (`/discover`
+  in pm-skills). There are no slash commands here, so a file picked under
+  `commands` reaches the role as a skill named after the file (`discover`),
+  holding the workflow as written. It is read from the installed file each
+  time the squad is built: `skills install --update` is all it takes to
+  follow a change upstream.
+- **Progressive disclosure**: an agent's prompt lists only the name and
+  description of its own role's skills. It loads one's instructions with
+  `load_capability` and reads its files with `read_skill_resource`, which
+  never leaves the skill's folder.
+- **Scripts**: a project skill's scripts run only as the tools declared
+  under `tools`. The model fills `params`, validated by a Pydantic model
+  (types, `choices`, `minimum`/`maximum`); `fixed_args` are yours, so the
+  model never picks a destination. The script runs with no shell, a
+  `timeout` (30 seconds by default) and the skill's folder as working
+  directory.
+- **Approval**: a tool pauses for your yes or no unless it says
+  `approval: false`, which is for a script that writes nothing. Only the
+  Facilitator and the Designer can pause, so only they can have a tool
+  that needs approval.
+
+The skills this was built for, none of which is in this repository:
+
+| Role | Skills | Source | License | Status |
+| --- | --- | --- | --- | --- |
+| Product PM | `pm-product-discovery`, `pm-market-research` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Phase 1, in `examples/skills.yaml` |
+| Designer | `ui-ux-pro-max` (foundation: tokens, palette, typography, accessibility) | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) | MIT | Phase 1, in `examples/skills.yaml` |
+| Designer | `design-taste-frontend` (visual direction of a page) | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) | MIT | Phase 1, in `examples/skills.yaml` |
+| Marketing PM | `pm-marketing-growth` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Phase 2, not wired |
+| Growth PM | `pm-go-to-market` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Phase 2, not wired |
+| Product Owner | `pm-execution` | [phuryn/pm-skills](https://github.com/phuryn/pm-skills) | MIT | Phase 2, not wired |
+| Marketing PM or HX | `last30days` (trend listening) | [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill) | MIT | Phase 3, not wired |
+| Product Owner | OpenSpec (hand-off format for developers) | [Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec) | MIT | Phase 3, not wired |
+
+HX takes no external skill: it is the squad's source of product knowledge,
+and the other roles consult it. A skill is a method, never a source of
+facts. Check each repository's license before using it; `skills install`
+prints the first line of the one it finds.
+
 ## Observability
 
 See [ADR 0006](docs/adr/0006-observability-and-checkpointing.md). A cycle
@@ -527,7 +621,9 @@ See [docs/roadmap.md](docs/roadmap.md).
 ```bash
 uv sync  # add --extra ai for tests/test_product_assembly.py, tests/test_product_committee.py,
          # tests/test_product_marketing.py and tests/test_product_observability.py,
-         # --extra skills for tests/test_product_skills.py,
+         # --extra skills for tests/test_product_skills.py, tests/test_product_project_skills.py,
+         # tests/test_product_skill_registry.py, tests/test_product_skill_tools.py
+         # and tests/test_product_skills_config.py,
          # --extra observability for tests/test_cli.py and tests/test_product_chat.py,
          # --extra otel for tests/test_product_otel.py
 uv run pytest
